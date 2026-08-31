@@ -190,6 +190,34 @@ async function loadStatus() {
   }
 }
 
+async function loadRules() {
+  try {
+    const data = await api("/api/rules");
+    const list = $("rules");
+    list.innerHTML = "";
+
+    if (!data.rules.length) {
+      $("rules-summary").textContent =
+        "No rules configured. Copy rules.example.json to rules.json to have the agent react on its own.";
+      return;
+    }
+    const left = data.budget_per_day - data.budget_used;
+    $("rules-summary").textContent = data.enabled
+      ? `${data.rules.length} rule(s) · ${data.budget_used}/${data.budget_per_day} automatic runs used today${left === 0 ? " — budget spent" : ""}`
+      : "Rules are switched off (RULES_ENABLED=false).";
+
+    for (const rule of data.rules) {
+      const li = el("li");
+      li.appendChild(el("span", null, rule.name));
+      li.appendChild(el("span", "meta", `cooldown ${rule.cooldown_minutes}m`));
+      li.title = rule.goal;
+      list.appendChild(li);
+    }
+  } catch (err) {
+    $("rules-summary").textContent = `rules unavailable: ${err.message}`;
+  }
+}
+
 async function loadRuns() {
   const runs = await api("/api/runs?limit=15");
   const list = $("runs");
@@ -201,6 +229,12 @@ async function loadRuns() {
   for (const run of runs) {
     const li = el("li", "click");
     li.appendChild(el("span", `badge ${run.status}`, run.status));
+    if (run.trigger) {
+      const auto = el("span", "badge auto", `↻ ${run.trigger}`);
+      auto.title = "Started automatically by this rule";
+      li.appendChild(document.createTextNode(" "));
+      li.appendChild(auto);
+    }
     li.appendChild(document.createTextNode(" "));
     li.appendChild(el("span", null, run.goal.slice(0, 90)));
     li.appendChild(el("span", "meta", relativeTime(run.created_at)));
@@ -350,7 +384,10 @@ function connectStream() {
     setTimeout(connectStream, streamRetry);
   };
 
-  stream.addEventListener("run.started", loadRuns);
+  stream.addEventListener("run.started", () => {
+    loadRuns();
+    loadRules();  // an automatic run consumes budget
+  });
   stream.addEventListener("run.step", (event) => {
     const data = JSON.parse(event.data);
     if (data.run_id === activeRun) showRun(data.run_id);
@@ -374,6 +411,7 @@ function connectStream() {
 loadStatus();
 loadMarkets();
 loadRuns();
+loadRules();
 loadFeed();
 connectStream();
 

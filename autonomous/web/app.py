@@ -27,10 +27,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from autonomous.agent import Agent
-from autonomous.config import Settings, get_settings
+from autonomous.config import REPO_ROOT, Settings, get_settings
 from autonomous.errors import describe
 from autonomous.events import EventBus
 from autonomous.providers import ProviderError, build_provider
+from autonomous.rules import RuleEngine, load_rules
 from autonomous.storage import Database
 from autonomous.tools import build_registry
 from autonomous.watchers import build_scheduler
@@ -38,6 +39,7 @@ from autonomous.web import auth
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
+RULES_FILE = REPO_ROOT / "rules.json"
 
 
 class RunRequest(BaseModel):
@@ -85,6 +87,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bus = EventBus()
     registry = build_registry(settings, db)
     scheduler = build_scheduler(settings, db, bus)
+    rules = load_rules(RULES_FILE)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -116,6 +119,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Runs in flight, so a page reload does not lose them.
     app.state.tasks: dict[int, asyncio.Task] = {}
 
+    async def _start_run(goal: str, trigger: str | None = None) -> int:
+        """Create a run and execute it in the background. Returns its id."""
+        model = settings.gemini_model if settings.provider == "gemini" else settings.provider
+        run_id = db.create_run(goal, settings.provider, model, trigger)
+        task = asyncio.create_task(_execute(run_id, goal, None))
+        app.state.tasks[run_id] = task
+        task.add_done_callback(lambda _t, rid=run_id: app.state.tasks.pop(rid, None))
+        return run_id
+
     async def _execute(run_id: int, goal: str, provider_name: str | None) -> None:
         try:
             provider = build_provider(settings, provider_name)
@@ -125,6 +137,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return
         agent = Agent(provider, registry, db, settings, bus)
         await agent.run(goal, run_id=run_id)
+
+    # Rules react to what the watchers find, by starting runs through the same
+    # path the panel uses.
+    engine = RuleEngine(rules, settings, db, _start_run)
+    app.state.rules = engine
+    scheduler.on_new_observations = engine.react
 
     @app.get("/api/status")
     async def status() -> dict[str, Any]:
@@ -148,6 +166,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.tasks[run_id] = task
         task.add_done_callback(lambda _t, rid=run_id: app.state.tasks.pop(rid, None))
         return {"id": run_id, "status": "running"}
+
+    @app.get("/api/rules")
+    async def list_rules() -> dict[str, Any]:
+        return {
+            "enabled": settings.rules_enabled,
+            "budget_per_day": settings.max_auto_runs_per_day,
+            "budget_used": engine.budget_used,
+            "rules": [
+                {"name": r.name, "cooldown_minutes": r.cooldown_minutes, "goal": r.goal}
+                for r in rules
+            ],
+        }
 
     @app.get("/api/runs")
     async def list_runs(limit: int = 50) -> list[dict[str, Any]]:

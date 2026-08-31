@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     max_steps: int = 12
     step_timeout_seconds: float = 120.0
 
+    # --- Reactive rules ----------------------------------------------------
+    # Rules start agent runs on their own when a watcher sees something
+    # matching. This is the only path that spends money unprompted, so it is
+    # capped: when the daily budget is spent, rules stop firing until midnight
+    # UTC. Set rules_enabled=False to stop them entirely.
+    rules_enabled: bool = True
+    max_auto_runs_per_day: int = 12
+
     # --- Tools -------------------------------------------------------------
     http_timeout_seconds: float = 30.0
     http_max_bytes: int = 2_000_000

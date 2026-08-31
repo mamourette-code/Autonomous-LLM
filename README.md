@@ -56,6 +56,7 @@ switches itself off.
 | `IMAP_HOST` / `IMAP_USER` / `IMAP_PASSWORD` | Enables the email watcher (read-only) |
 | `FEED_URLS` | Any other RSS/Atom feeds to watch |
 | `AUTH_TOKEN` | Required to sign in. **Set this before exposing the panel** |
+| `RULES_ENABLED` / `MAX_AUTO_RUNS_PER_DAY` | Reactive rules and their daily cap |
 | `HOST` / `PORT` | Where the panel binds. Default is localhost only |
 | `BROWSER_ENABLED` | Headless-browser page reading |
 | `BROWSER_ACTIONS_ENABLED` | Lets the agent click, type and submit forms |
@@ -77,6 +78,57 @@ pip install -e ".[browser]" && playwright install chromium
 Then set `BROWSER_ENABLED=true`. Acting on pages (`browser_interact`) additionally
 needs `BROWSER_ACTIONS_ENABLED=true`; it is off by default because it operates on
 real sites under your identity.
+
+## Running it all the time
+
+`deploy/install.sh` installs the panel as a background service that starts when
+you log in — a systemd user unit on Linux, a launchd agent on macOS:
+
+```bash
+./deploy/install.sh              # install and start
+./deploy/install.sh --uninstall  # stop and remove
+```
+
+Linux logs go to `journalctl --user -u autonomous -f`; macOS to
+`data/panel.log`. On Linux, `sudo loginctl enable-linger $USER` keeps it
+running while you are logged out.
+
+**A laptop sleeps.** Watchers only poll, and rules only fire, while the machine
+is awake — and the panel is reachable only from that machine. If you want it
+genuinely always-on and reachable from your phone, it needs to live on a
+machine that stays up; the app is ready for that (see *Exposing the panel*).
+
+## Reacting on its own
+
+Rules turn a new observation into an agent run without you being there. Copy
+`rules.example.json` to `rules.json`:
+
+```json
+{
+  "name": "Sharp index move",
+  "when": { "kind": "quote", "change_percent_abs_above": 2.0 },
+  "goal": "{name} moved {change_percent}% today, to {price}. What drove it?",
+  "cooldown_minutes": 240
+}
+```
+
+Conditions combine with AND: `kind` (`quote` or `headline`), `source`,
+`symbol`, `title_matches` (any of, case-insensitive), and
+`change_percent_above` / `_below` / `_abs_above`. Goals can use `{title}`,
+`{url}`, `{source}`, `{symbol}`, `{name}`, `{price}`, `{change_percent}`.
+
+This is the only path that spends money without you asking, so it is bounded
+three ways:
+
+- **Only genuinely new observations fire a rule** — a re-reported headline cannot
+  trigger the same run twice.
+- **Per-rule `cooldown_minutes`** — a burst of thirty similar headlines produces
+  one run, not thirty.
+- **`MAX_AUTO_RUNS_PER_DAY`** caps automatic runs across all rules; when it is
+  spent they stop until midnight UTC. The panel shows the count.
+
+Set `RULES_ENABLED=false` to stop them entirely. Automatic runs are badged with
+the rule that started them.
 
 ## Exposing the panel
 
@@ -126,5 +178,6 @@ autonomous/
 ├── agent/loop.py    # goal -> tool calls -> answer
 ├── watchers/        # the continuously running half + scheduler
 ├── storage/         # SQLite: runs, steps, observations
-└── web/             # FastAPI app and single-page UI
+├── rules.py         # reactive rules: observation -> agent run
+└── web/             # FastAPI app, auth, event stream, panel
 ```

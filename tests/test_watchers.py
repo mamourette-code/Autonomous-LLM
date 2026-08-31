@@ -274,3 +274,34 @@ async def test_change_is_against_the_prior_session_not_the_range_start(settings,
     assert quote.data["previous_close"] == 100.0
     assert quote.data["change_percent"] == pytest.approx(1.0)
     assert quote.data["sparkline"] == [50.0, 90.0, 100.0, 101.0]
+
+
+async def test_change_percent_is_rounded_for_display_and_templating(settings, monkeypatch):
+    import httpx
+
+    from autonomous.watchers.markets import MarketsWatcher
+
+    settings.markets_symbols = ["^GSPC"]
+    settings.markets_feed_urls = []
+
+    async def fake_get(self, url, **kwargs):
+        return httpx.Response(
+            200,
+            json={
+                "chart": {
+                    "result": [
+                        {
+                            "meta": {"symbol": "^GSPC", "regularMarketPrice": 7680.79},
+                            "indicators": {"quote": [{"close": [7711.76, 7680.79]}]},
+                        }
+                    ]
+                }
+            },
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    quote = (await MarketsWatcher(settings).poll())[0]
+
+    # Not -0.4015914209756259.
+    assert quote.data["change_percent"] == -0.4

@@ -196,4 +196,5 @@ pre {
 }
 .badge.running   { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
 .badge.succeeded { color: var(--good);   border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+.badge.auto      { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 .badge.failed    { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 45%, var(--line)); }

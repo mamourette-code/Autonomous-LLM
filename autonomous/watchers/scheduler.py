@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -44,6 +45,7 @@ class Scheduler:
     db: Database
     watchers: list[Watcher] = field(default_factory=list)
     bus: EventBus | None = None
+    on_new_observations: Callable[[str, list[dict]], Awaitable[None]] | None = None
     status: dict[str, WatcherStatus] = field(default_factory=dict)
     _tasks: list[asyncio.Task] = field(default_factory=list)
 
@@ -89,7 +91,7 @@ class Scheduler:
                 self.bus.publish("watcher.failed", watcher=watcher.name, error=status.last_error)
             raise
 
-        new = self.db.add_observations(
+        inserted = self.db.add_observations(
             {
                 "source": watcher.name,
                 "key": obs.key,
@@ -100,6 +102,7 @@ class Scheduler:
             }
             for obs in observations
         )
+        new = len(inserted)
         status.last_poll = datetime.now(UTC).isoformat(timespec="seconds")
         status.last_error = None
         status.consecutive_failures = 0
@@ -108,6 +111,12 @@ class Scheduler:
         log.info("watcher %s: %d observed, %d new", watcher.name, len(observations), new)
         if self.bus:
             self.bus.publish("watcher.polled", watcher=watcher.name, new_observations=new)
+        if inserted and self.on_new_observations:
+            # Reacting must never break collecting.
+            try:
+                await self.on_new_observations(watcher.name, inserted)
+            except Exception as exc:
+                log.exception("reacting to %s observations failed: %s", watcher.name, describe(exc))
         return new
 
     async def _loop(self, watcher: Watcher) -> None:

@@ -25,6 +25,7 @@ autonomous poll markets          # poll a single watcher once
 pytest                           # full suite
 pytest tests/test_agent.py -k budget   # a single test
 ruff check . && ruff format .    # lint, then format
+./deploy/install.sh              # install as a login service (systemd/launchd)
 ```
 
 `PROVIDER=mock` runs the whole agent loop with no API key and no network — use
@@ -66,6 +67,17 @@ depends on:
    let a tool failure kill a run.
 2. *Arguments are filtered.* Models invent parameters; `_filter_args` drops any
    the function does not accept.
+
+**Rules.** `rules.py` reacts to observations by starting runs. It is the only
+path that spends money unprompted, so its three bounds are load-bearing, not
+decoration — keep every one of them when changing it:
+1. Only rows `add_observations` reports as *new* are evaluated (that method
+   returns the inserted rows for exactly this reason).
+2. Per-rule cooldown, stamped *before* the run is awaited so an overlapping
+   poll cannot double-fire.
+3. `MAX_AUTO_RUNS_PER_DAY`, counted from the database so a restart cannot
+   reset it.
+One run per rule per batch, never one per matching item.
 
 **Events.** `events.py` is an in-process bus. The agent loop publishes
 `run.started` / `run.step` / `run.finished`; the scheduler publishes

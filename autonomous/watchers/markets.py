@@ -42,7 +42,9 @@ def _clean_name(value: str) -> str:
 def _format_change(price: float | None, previous: float | None) -> tuple[float | None, str]:
     if price is None or not previous:
         return None, "n/a"
-    change = (price - previous) / previous * 100
+    # Rounded at source: this value is displayed, and substituted into rule
+    # goals, where full float precision is noise.
+    change = round((price - previous) / previous * 100, 2)
     return change, f"{change:+.2f}%"
 
 

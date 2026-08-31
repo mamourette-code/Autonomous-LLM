@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS runs (
     model       TEXT    NOT NULL,
     result      TEXT,
     error       TEXT,
+    trigger     TEXT,
     created_at  TEXT    NOT NULL,
     finished_at TEXT
 );
@@ -69,7 +70,14 @@ class Database:
         self._conn.execute("PRAGMA foreign_keys=ON")
         with self._lock:
             self._conn.executescript(SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Additive migrations for databases created by an earlier version."""
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(runs)")}
+        if "trigger" not in columns:
+            self._conn.execute("ALTER TABLE runs ADD COLUMN trigger TEXT")
 
     def close(self) -> None:
         with self._lock:
@@ -77,12 +85,12 @@ class Database:
 
     # --- runs --------------------------------------------------------------
 
-    def create_run(self, goal: str, provider: str, model: str) -> int:
+    def create_run(self, goal: str, provider: str, model: str, trigger: str | None = None) -> int:
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO runs (goal, status, provider, model, created_at)"
-                " VALUES (?, 'running', ?, ?, ?)",
-                (goal, provider, model, _now()),
+                "INSERT INTO runs (goal, status, provider, model, trigger, created_at)"
+                " VALUES (?, 'running', ?, ?, ?, ?)",
+                (goal, provider, model, trigger, _now()),
             )
             self._conn.commit()
             return int(cur.lastrowid)
@@ -131,31 +139,46 @@ class Database:
 
     # --- observations ------------------------------------------------------
 
-    def add_observations(self, items: Iterable[dict[str, Any]]) -> int:
-        """Insert observations, ignoring ones already seen. Returns the new count."""
-        rows = [
-            (
-                item["source"],
-                item["key"],
-                item["title"],
-                item.get("body"),
-                item.get("url"),
-                json.dumps(item.get("data")) if item.get("data") is not None else None,
-                item.get("created_at") or _now(),
-            )
-            for item in items
-        ]
-        if not rows:
-            return 0
+    def add_observations(self, items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Insert observations, ignoring ones already seen.
+
+        Returns only the rows that were genuinely new, which is what the rule
+        engine acts on - re-reporting an old headline must not re-fire a rule.
+        """
+        items = list(items)
+        if not items:
+            return []
+        inserted: list[dict[str, Any]] = []
         with self._lock:
-            before = self._conn.total_changes
-            self._conn.executemany(
-                "INSERT OR IGNORE INTO observations"
-                " (source, key, title, body, url, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                rows,
-            )
+            for item in items:
+                created_at = item.get("created_at") or _now()
+                cur = self._conn.execute(
+                    "INSERT OR IGNORE INTO observations"
+                    " (source, key, title, body, url, data, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        item["source"],
+                        item["key"],
+                        item["title"],
+                        item.get("body"),
+                        item.get("url"),
+                        json.dumps(item.get("data")) if item.get("data") is not None else None,
+                        created_at,
+                    ),
+                )
+                if cur.rowcount:
+                    inserted.append({**item, "created_at": created_at})
             self._conn.commit()
-            return self._conn.total_changes - before
+        return inserted
+
+    def count_runs_since(self, since: str, *, automatic: bool) -> int:
+        """How many runs started since an ISO timestamp - used for the daily budget."""
+        clause = "trigger IS NOT NULL" if automatic else "trigger IS NULL"
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT COUNT(*) AS n FROM runs WHERE created_at >= ? AND {clause}", (since,)
+            ).fetchone()
+        return int(row["n"])
 
     def list_observations(
         self, limit: int = 100, source: str | None = None

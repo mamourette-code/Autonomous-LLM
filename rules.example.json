@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy to rules.json and edit. Rules start agent runs on their own, so they are bounded by cooldown_minutes and by MAX_AUTO_RUNS_PER_DAY. Placeholders available in goal: {title} {url} {source} {symbol} {name} {price} {change_percent}.",
+  "rules": [
+    {
+      "name": "Sharp index move",
+      "when": { "kind": "quote", "change_percent_abs_above": 2.0 },
+      "goal": "{name} moved {change_percent}% today, to {price}. Find out what drove the move, using recent market headlines and the web, and give me three sentences.",
+      "cooldown_minutes": 240
+    },
+    {
+      "name": "Central bank news",
+      "when": {
+        "kind": "headline",
+        "title_matches": ["fed", "powell", "ecb", "rate cut", "rate hike", "interest rate"]
+      },
+      "goal": "This headline just came in: \"{title}\" ({url}). Summarise what was actually said and what it means for rates and equities. Be brief.",
+      "cooldown_minutes": 120
+    }
+  ]
+}

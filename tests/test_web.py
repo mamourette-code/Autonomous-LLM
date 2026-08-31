@@ -103,3 +103,58 @@ def test_markets_endpoint_keeps_only_the_latest_level_per_symbol(client):
     quotes = client.get("/api/markets").json()["quotes"]
     assert len(quotes) == 1
     assert quotes[0]["price"] == 200
+
+
+def test_rules_endpoint_reports_the_budget(client):
+    body = client.get("/api/rules").json()
+    assert body["enabled"] is True
+    assert body["budget_used"] == 0
+    assert body["budget_per_day"] > 0
+
+
+def test_a_watcher_poll_fires_a_rule_and_starts_a_run(client, settings):
+    """The whole reactive path: watcher observes -> rule matches -> run starts."""
+    from autonomous.rules import Rule
+    from autonomous.watchers.base import Observation, Watcher
+
+    class Spike(Watcher):
+        name = "spike"
+        interval_seconds = 60
+
+        async def poll(self):
+            return [
+                Observation(
+                    key="quote:^GSPC:1",
+                    title="S&P 500: 5000 (-4.00%)",
+                    data={
+                        "kind": "quote",
+                        "symbol": "^GSPC",
+                        "name": "S&P 500",
+                        "change_percent": -4.0,
+                    },
+                )
+            ]
+
+    app = client.app
+    app.state.rules.rules = [
+        Rule(
+            name="Sharp move",
+            goal="Why did {name} move {change_percent}%?",
+            kind="quote",
+            change_percent_abs_above=2.0,
+        )
+    ]
+    app.state.scheduler.watchers.append(Spike())
+    app.state.scheduler.status["spike"] = type(app.state.scheduler.status["markets"])(
+        name="spike", interval_seconds=60, enabled=True
+    )
+
+    assert client.post("/api/watchers/spike/poll").json()["new_observations"] == 1
+
+    runs = client.get("/api/runs").json()
+    triggered = [r for r in runs if r["trigger"] == "Sharp move"]
+    assert len(triggered) == 1
+    assert triggered[0]["goal"] == "Why did S&P 500 move -4.0%?"
+
+    # And it counts against the daily budget.
+    assert client.get("/api/rules").json()["budget_used"] == 1
