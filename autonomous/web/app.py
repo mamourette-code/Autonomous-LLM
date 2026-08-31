@@ -106,6 +106,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def observations(limit: int = 100, source: str | None = None) -> list[dict[str, Any]]:
         return db.list_observations(limit=min(limit, 500), source=source)
 
+    @app.get("/api/markets")
+    async def markets() -> dict[str, Any]:
+        """Latest level per symbol plus recent headlines, shaped for the panel."""
+        raw = db.list_observations(limit=400, source="markets")
+        latest: dict[str, dict[str, Any]] = {}
+        headlines: list[dict[str, Any]] = []
+        for item in raw:
+            data = item.get("data") or {}
+            if data.get("kind") == "quote":
+                # list_observations is newest-first, so the first hit per symbol wins.
+                latest.setdefault(data["symbol"], {**data, "observed_at": item["created_at"]})
+            elif data.get("kind") == "headline":
+                headlines.append(
+                    {
+                        "title": item["title"],
+                        "url": item["url"],
+                        "source": data.get("source"),
+                        "published": data.get("published"),
+                        "observed_at": item["created_at"],
+                    }
+                )
+        # Keep the configured symbol order rather than whatever the DB returned.
+        order = {symbol: i for i, symbol in enumerate(settings.markets_symbols)}
+        quotes = sorted(latest.values(), key=lambda q: order.get(q["symbol"], 999))
+        return {"quotes": quotes, "headlines": headlines[:40]}
+
     @app.post("/api/watchers/{name}/poll")
     async def poll_watcher(name: str) -> dict[str, Any]:
         watcher = next((w for w in scheduler.watchers if w.name == name), None)

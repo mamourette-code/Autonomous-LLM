@@ -2,15 +2,17 @@
 
 A self-hosted autonomous assistant with two halves:
 
-- **Watchers** run continuously, polling sources you care about — an IMAP inbox,
-  marine conditions at your sailing location, RSS/Atom feeds — and writing what
-  they find to a local feed. They only ever *observe*: no model calls, no actions.
+- **Watchers** run continuously, polling sources you care about — financial
+  market levels and headlines, an IMAP inbox, any RSS/Atom feed — and writing
+  what they find to a local feed. They only ever *observe*: no model calls,
+  no actions.
 - **Task runs** happen when *you* ask for one. A goal goes to an LLM that plans,
   calls tools (fetch a page, read a feed, call a configured API, drive a headless
   browser, read the watcher feed) and iterates until it can answer.
 
-Everything runs locally against a SQLite file. The web UI at `127.0.0.1:8000`
-starts runs, shows each step as it happens, and displays the watcher feed.
+Everything runs locally against a SQLite file. The panel at `127.0.0.1:8000`
+leads with market levels and headlines, starts task runs and shows each step as
+it happens.
 
 ## Quick start
 
@@ -36,7 +38,7 @@ exercise the agent loop offline.
 |---|---|
 | `autonomous serve` | Start the web UI and the watchers |
 | `autonomous run "your goal"` | Run one goal from the terminal |
-| `autonomous poll marine` | Poll one watcher once and print what is new |
+| `autonomous poll markets` | Poll one watcher once and print what is new |
 | `pytest` | Run the test suite |
 | `ruff check . && ruff format .` | Lint and format |
 
@@ -50,9 +52,9 @@ switches itself off.
 |---|---|
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | The model backend |
 | `MAX_STEPS` | Ceiling on tool-calling iterations per run |
+| `MARKETS_SYMBOLS` / `MARKETS_FEED_URLS` | The markets watcher. On by default, keyless |
 | `IMAP_HOST` / `IMAP_USER` / `IMAP_PASSWORD` | Enables the email watcher (read-only) |
-| `MARINE_LATITUDE` / `MARINE_LONGITUDE` | Enables the marine watcher (no API key needed) |
-| `FEED_URLS` | JSON list of RSS/Atom URLs |
+| `FEED_URLS` | Any other RSS/Atom feeds to watch |
 | `BROWSER_ENABLED` | Headless-browser page reading |
 | `BROWSER_ACTIONS_ENABLED` | Lets the agent click, type and submit forms |
 
@@ -73,6 +75,19 @@ pip install -e ".[browser]" && playwright install chromium
 Then set `BROWSER_ENABLED=true`. Acting on pages (`browser_interact`) additionally
 needs `BROWSER_ACTIONS_ENABLED=true`; it is off by default because it operates on
 real sites under your identity.
+
+## The markets panel
+
+The panel leads with a KPI row: one stat tile per symbol showing the level, the
+change against the **prior session's close**, and a sparkline of the last month
+of daily closes. Symbols are Yahoo Finance tickers, so anything that site quotes
+works — indices, FX pairs, futures, crypto.
+
+Direction is shown three ways at once — an arrow, a signed number, and hue — so
+it never depends on color alone. The up/down hues are blue and red rather than
+the conventional green/red: red-green is the one pair that the most common forms
+of color blindness cannot separate. Both hues are validated against the light
+and dark surfaces.
 
 ## Layout
 

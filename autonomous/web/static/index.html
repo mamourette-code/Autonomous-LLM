@@ -7,34 +7,64 @@
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<header>
-  <h1>Autonomous&#8209;LLM</h1>
-  <div id="status" class="status">connecting…</div>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" id="health-dot" aria-hidden="true"></span>
+    <h1>Autonomous</h1>
+  </div>
+  <div class="topbar-meta">
+    <span id="provider-chip" class="chip">…</span>
+    <span id="watcher-chips" class="chips"></span>
+  </div>
 </header>
 
-<main>
-  <section class="panel">
-    <h2>Run a task</h2>
-    <form id="run-form">
-      <textarea id="goal" rows="3" placeholder="e.g. Summarise what came into my inbox today and flag anything about the boat."></textarea>
-      <button type="submit" id="submit">Run</button>
-    </form>
-    <div id="run-detail" class="detail" hidden></div>
-  </section>
+<main class="panel">
 
-  <section class="panel">
-    <h2>Recent runs</h2>
-    <ul id="runs" class="list"></ul>
-  </section>
-
-  <section class="panel">
-    <h2>Watcher feed</h2>
-    <div class="row">
-      <select id="source-filter"><option value="">all sources</option></select>
-      <span id="watcher-summary" class="muted"></span>
+  <section class="board" aria-labelledby="markets-heading">
+    <div class="board-head">
+      <h2 id="markets-heading">Markets</h2>
+      <span class="board-meta" id="markets-updated"></span>
     </div>
-    <ul id="feed" class="list"></ul>
+    <div id="quotes" class="tiles" role="list">
+      <p class="empty">Waiting for the first poll…</p>
+    </div>
   </section>
+
+  <div class="columns">
+    <section class="board" aria-labelledby="headlines-heading">
+      <div class="board-head">
+        <h2 id="headlines-heading">Headlines</h2>
+        <button type="button" class="ghost" id="refresh-markets">Refresh</button>
+      </div>
+      <ul id="headlines" class="stream"></ul>
+    </section>
+
+    <section class="board" aria-labelledby="task-heading">
+      <div class="board-head"><h2 id="task-heading">Run a task</h2></div>
+      <form id="run-form">
+        <textarea id="goal" rows="3"
+          placeholder="e.g. Summarise this morning's market headlines and flag anything about rates."></textarea>
+        <div class="form-row">
+          <button type="submit" id="submit">Run</button>
+          <span class="hint" id="run-hint"></span>
+        </div>
+      </form>
+      <div id="run-detail" class="transcript" hidden></div>
+      <h3 class="subhead">Recent runs</h3>
+      <ul id="runs" class="stream compact"></ul>
+    </section>
+  </div>
+
+  <section class="board" aria-labelledby="feed-heading">
+    <div class="board-head">
+      <h2 id="feed-heading">Watcher feed</h2>
+      <select id="source-filter" aria-label="Filter by source">
+        <option value="">all sources</option>
+      </select>
+    </div>
+    <ul id="feed" class="stream"></ul>
+  </section>
+
 </main>
 
 <script src="/static/app.js"></script>

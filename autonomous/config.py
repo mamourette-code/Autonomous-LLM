@@ -53,13 +53,31 @@ class Settings(BaseSettings):
     imap_mailbox: str = "INBOX"
     email_poll_seconds: int = 300
 
-    # Marine conditions, polled from the keyless Open-Meteo marine API.
-    marine_latitude: float | None = None
-    marine_longitude: float | None = None
-    marine_location_name: str = "home waters"
-    marine_poll_seconds: int = 1800
+    # Financial markets: index/FX/commodity levels and market headlines.
+    # Both are keyless. Empty either list to switch that half off.
+    markets_symbols: list[str] = Field(
+        default_factory=lambda: [
+            "^GSPC",  # S&P 500
+            "^IXIC",  # Nasdaq Composite
+            "^DJI",  # Dow Jones
+            "^FTSE",  # FTSE 100
+            "^STOXX50E",  # Euro Stoxx 50
+            "EURUSD=X",
+            "GC=F",  # Gold
+            "CL=F",  # Crude oil
+            "BTC-USD",
+        ]
+    )
+    markets_feed_urls: list[str] = Field(
+        default_factory=lambda: [
+            "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+            "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
+            "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines",
+        ]
+    )
+    markets_poll_seconds: int = 3600
 
-    # Comma-separated RSS/Atom URLs (notices to mariners, forecasts, news...).
+    # Any other RSS/Atom URLs you want watched, as a JSON list.
     feed_urls: list[str] = Field(default_factory=list)
     feed_poll_seconds: int = 1800
 

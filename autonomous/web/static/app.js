@@ -1,114 +1,259 @@
+"use strict";
+
 const $ = (id) => document.getElementById(id);
-const api = async (path, options) => {
+
+async function api(path, options) {
   const response = await fetch(path, options);
   if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || `${response.status} ${response.statusText}`);
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `${response.status} ${response.statusText}`);
   }
   return response.json();
-};
-const text = (value) => (value == null ? "" : String(value));
+}
 
-let activeRun = null;
-let pollTimer = null;
+const el = (tag, className, textContent) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (textContent != null) node.textContent = textContent;
+  return node;
+};
+
+/** Compact numbers the way a trading screen does: keep precision where it matters. */
+function formatPrice(value) {
+  if (value == null) return "—";
+  const abs = Math.abs(value);
+  const decimals = abs >= 1000 ? 0 : abs >= 10 ? 2 : 4;
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+function relativeTime(iso) {
+  if (!iso) return "";
+  const seconds = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (!Number.isFinite(seconds)) return "";
+  if (seconds < 90) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/** 12-24 point sparkline. Context only, so it carries no axis or labels. */
+function sparkline(points, direction) {
+  const width = 76;
+  const height = 22;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "spark");
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("aria-hidden", "true");
+  if (!points || points.length < 2) return svg;
+
+  const low = Math.min(...points);
+  const high = Math.max(...points);
+  const span = high - low || 1;
+  const step = width / (points.length - 1);
+  const path = points
+    .map((value, i) => {
+      const x = i * step;
+      const y = height - 2 - ((value - low) / span) * (height - 4);
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  line.setAttribute("d", path);
+  line.setAttribute("fill", "none");
+  line.setAttribute("stroke", `var(--${direction})`);
+  line.setAttribute("stroke-width", "1.5");
+  line.setAttribute("stroke-linejoin", "round");
+  line.setAttribute("stroke-linecap", "round");
+  svg.appendChild(line);
+  return svg;
+}
+
+function quoteTile(quote) {
+  const change = quote.change_percent;
+  const direction = change == null ? "flat" : change > 0.005 ? "up" : change < -0.005 ? "down" : "flat";
+  const arrow = direction === "up" ? "▲" : direction === "down" ? "▼" : "▬";
+
+  const tile = el("div", "tile");
+  tile.setAttribute("role", "listitem");
+  tile.appendChild(el("div", "label", quote.name || quote.symbol));
+
+  const value = el("div", "value", formatPrice(quote.price));
+  if (quote.currency) value.title = `${quote.price} ${quote.currency}`;
+  tile.appendChild(value);
+
+  const row = el("div", "row");
+  const delta = el(
+    "span",
+    `delta ${direction}`,
+    change == null ? "—" : `${arrow} ${change >= 0 ? "+" : ""}${change.toFixed(2)}%`
+  );
+  // Screen readers get the direction in words, not as a glyph.
+  delta.setAttribute(
+    "aria-label",
+    change == null ? "change unavailable" : `${direction === "down" ? "down" : "up"} ${Math.abs(change).toFixed(2)} percent`
+  );
+  row.appendChild(delta);
+  row.appendChild(sparkline(quote.sparkline, direction));
+  tile.appendChild(row);
+  return tile;
+}
+
+async function loadMarkets() {
+  try {
+    const { quotes, headlines } = await api("/api/markets");
+
+    const tiles = $("quotes");
+    tiles.innerHTML = "";
+    if (!quotes.length) {
+      tiles.appendChild(el("p", "empty", "Waiting for the first poll…"));
+    } else {
+      for (const quote of quotes) tiles.appendChild(quoteTile(quote));
+      $("markets-updated").textContent = `updated ${relativeTime(quotes[0].observed_at)}`;
+    }
+
+    const list = $("headlines");
+    list.innerHTML = "";
+    if (!headlines.length) {
+      list.appendChild(el("li", "empty", "No market headlines collected yet."));
+    }
+    for (const item of headlines) {
+      const li = el("li");
+      const link = el("a", null, item.title);
+      if (item.url) {
+        link.href = item.url;
+        link.target = "_blank";
+        link.rel = "noreferrer noopener";
+      }
+      li.appendChild(link);
+      li.appendChild(el("span", "meta", [item.source, relativeTime(item.observed_at)]
+        .filter(Boolean).join(" · ")));
+      list.appendChild(li);
+    }
+  } catch (err) {
+    $("markets-updated").textContent = `unavailable: ${err.message}`;
+  }
+}
 
 async function loadStatus() {
   try {
-    const s = await api("/api/status");
-    const ready = s.provider_ready ? "" : " — no API key set";
-    const watchers = s.watchers
-      .map((w) => `${w.name}: ${w.enabled ? (w.last_error ? "error" : "on") : "off"}`)
-      .join(" · ");
-    $("status").textContent =
-      `${s.provider}/${s.model}${ready} · ${s.tools.length} tools · ${watchers}`;
+    const status = await api("/api/status");
+    $("provider-chip").textContent = `${status.provider}/${status.model}`;
+    $("provider-chip").className = `chip ${status.provider_ready ? "on" : "err"}`;
+    if (!status.provider_ready) $("provider-chip").title = "No API key set for this provider";
+
+    const chips = $("watcher-chips");
+    chips.innerHTML = "";
+    let healthy = status.provider_ready;
+    for (const watcher of status.watchers) {
+      const state = !watcher.enabled ? "off" : watcher.last_error ? "err" : "on";
+      if (state === "err") healthy = false;
+      const chip = el("span", `chip ${state}`, watcher.name);
+      chip.title = !watcher.enabled
+        ? `${watcher.name}: not configured`
+        : watcher.last_error
+          ? `${watcher.name}: ${watcher.last_error}`
+          : `${watcher.name}: ${watcher.new_observations} collected, last polled ${relativeTime(watcher.last_poll) || "never"}`;
+      chips.appendChild(chip);
+    }
+    $("health-dot").className = `dot ${healthy ? "ok" : "bad"}`;
+
     const filter = $("source-filter");
     if (filter.options.length === 1) {
-      for (const w of s.watchers) {
-        filter.add(new Option(w.name, w.name));
-      }
+      for (const watcher of status.watchers) filter.add(new Option(watcher.name, watcher.name));
     }
-    $("watcher-summary").textContent = s.watchers
-      .filter((w) => w.enabled)
-      .map((w) => `${w.name}: ${w.new_observations} new, last ${w.last_poll || "never"}`)
-      .join(" · ");
   } catch (err) {
-    $("status").textContent = `status unavailable: ${err.message}`;
+    $("health-dot").className = "dot bad";
+    $("provider-chip").textContent = `offline: ${err.message}`;
   }
 }
 
 async function loadRuns() {
-  const runs = await api("/api/runs?limit=25");
+  const runs = await api("/api/runs?limit=15");
   const list = $("runs");
   list.innerHTML = "";
+  if (!runs.length) {
+    list.appendChild(el("li", "empty", "No runs yet."));
+    return;
+  }
   for (const run of runs) {
-    const li = document.createElement("li");
-    li.className = "click";
-    li.innerHTML =
-      `<span class="badge ${run.status}">${run.status}</span> ` +
-      `<strong></strong> <span class="muted"></span>`;
-    li.querySelector("strong").textContent = run.goal.slice(0, 110);
-    li.querySelector(".muted").textContent = run.created_at;
+    const li = el("li", "click");
+    li.appendChild(el("span", `badge ${run.status}`, run.status));
+    li.appendChild(document.createTextNode(" "));
+    li.appendChild(el("span", null, run.goal.slice(0, 90)));
+    li.appendChild(el("span", "meta", relativeTime(run.created_at)));
     li.onclick = () => showRun(run.id);
     list.appendChild(li);
   }
 }
 
+let activeRun = null;
+let runTimer = null;
+
 async function showRun(runId) {
   activeRun = runId;
   const run = await api(`/api/runs/${runId}`);
+  if (activeRun !== runId) return;
+
   const box = $("run-detail");
   box.hidden = false;
-  const parts = [
-    `<div class="row"><span class="badge ${run.status}">${run.status}</span>` +
-      `<span class="muted">run #${run.id} · ${run.provider}/${run.model}</span></div>`,
-  ];
+  box.innerHTML = "";
+
+  const head = el("div", "form-row");
+  head.appendChild(el("span", `badge ${run.status}`, run.status));
+  head.appendChild(el("span", "hint", `run #${run.id} · ${run.provider}/${run.model}`));
+  box.appendChild(head);
+
   for (const step of run.steps) {
-    const label = step.name ? `${step.kind} · ${step.name}` : step.kind;
-    parts.push(
-      `<div class="step ${step.kind}"><div class="k">${label}</div>` +
-        `<pre>${escapeHtml(text(step.content))}</pre></div>`
-    );
+    const div = el("div", `step ${step.kind}`);
+    div.appendChild(el("div", "k", step.name ? `${step.kind} · ${step.name}` : step.kind));
+    div.appendChild(el("pre", null, step.content || ""));
+    box.appendChild(div);
   }
   if (run.error) {
-    parts.push(`<div class="step failed"><div class="k">error</div>` +
-      `<pre>${escapeHtml(run.error)}</pre></div>`);
+    const div = el("div", "step error");
+    div.appendChild(el("div", "k", "error"));
+    div.appendChild(el("pre", null, run.error));
+    box.appendChild(div);
   }
-  box.innerHTML = parts.join("");
 
-  clearTimeout(pollTimer);
-  if (run.status === "running" && activeRun === runId) {
-    pollTimer = setTimeout(() => showRun(runId), 1500);
+  clearTimeout(runTimer);
+  if (run.status === "running") {
+    runTimer = setTimeout(() => showRun(runId), 1500);
   } else {
     loadRuns();
   }
 }
 
-function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
-  );
-}
-
 async function loadFeed() {
   const source = $("source-filter").value;
-  const query = source ? `?limit=100&source=${encodeURIComponent(source)}` : "?limit=100";
+  const query = source ? `?limit=80&source=${encodeURIComponent(source)}` : "?limit=80";
   const items = await api(`/api/observations${query}`);
   const list = $("feed");
   list.innerHTML = "";
   if (!items.length) {
-    const li = document.createElement("li");
-    li.className = "muted";
-    li.textContent = "Nothing yet. Watchers write here as they poll.";
-    list.appendChild(li);
+    list.appendChild(el("li", "empty", "Nothing yet. Watchers write here as they poll."));
     return;
   }
   for (const item of items) {
-    const li = document.createElement("li");
-    const title = item.url
-      ? `<a href="${encodeURI(item.url)}" target="_blank" rel="noreferrer noopener"></a>`
-      : "<span></span>";
-    li.innerHTML = `<span class="muted">${item.created_at} · ${escapeHtml(item.source)}</span><br>${title}`;
-    li.querySelector("a, span:last-child").textContent = item.title;
+    const li = el("li");
+    if (item.url) {
+      const link = el("a", null, item.title);
+      link.href = item.url;
+      link.target = "_blank";
+      link.rel = "noreferrer noopener";
+      li.appendChild(link);
+    } else {
+      li.appendChild(el("span", null, item.title));
+    }
+    li.appendChild(el("span", "meta", `${item.source} · ${relativeTime(item.created_at)}`));
     list.appendChild(li);
   }
 }
@@ -119,7 +264,7 @@ $("run-form").addEventListener("submit", async (event) => {
   if (!goal) return;
   const button = $("submit");
   button.disabled = true;
-  button.textContent = "Starting…";
+  $("run-hint").textContent = "starting…";
   try {
     const run = await api("/api/runs", {
       method: "POST",
@@ -127,20 +272,43 @@ $("run-form").addEventListener("submit", async (event) => {
       body: JSON.stringify({ goal }),
     });
     $("goal").value = "";
+    $("run-hint").textContent = "";
     await loadRuns();
     showRun(run.id);
   } catch (err) {
-    alert(`Could not start the run: ${err.message}`);
+    $("run-hint").textContent = `could not start: ${err.message}`;
   } finally {
     button.disabled = false;
-    button.textContent = "Run";
+  }
+});
+
+// Ctrl/Cmd+Enter submits, so a goal can be sent without leaving the textarea.
+$("goal").addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    $("run-form").requestSubmit();
   }
 });
 
 $("source-filter").addEventListener("change", loadFeed);
+$("refresh-markets").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Refreshing…";
+  try {
+    await api("/api/watchers/markets/poll", { method: "POST" });
+    await Promise.all([loadMarkets(), loadStatus(), loadFeed()]);
+  } catch (err) {
+    $("markets-updated").textContent = `refresh failed: ${err.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Refresh";
+  }
+});
 
 loadStatus();
+loadMarkets();
 loadRuns();
 loadFeed();
 setInterval(loadStatus, 15000);
-setInterval(loadFeed, 20000);
+setInterval(loadMarkets, 60000);
+setInterval(loadFeed, 30000);

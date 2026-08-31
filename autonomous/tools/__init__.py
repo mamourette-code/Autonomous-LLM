@@ -28,7 +28,7 @@ def _build_memory_tools(db: Database) -> list[Tool]:
             name="recent_observations",
             description=(
                 "Read what the background watchers have collected recently - new email, "
-                "marine conditions, feed items. Use this before searching the web for "
+                "market levels and headlines, feed items. Use this before searching the web for "
                 "something the watchers may already have seen."
             ),
             parameters={
@@ -36,7 +36,7 @@ def _build_memory_tools(db: Database) -> list[Tool]:
                 "properties": {
                     "source": {
                         "type": "string",
-                        "description": "Optional watcher name, e.g. 'email' or 'marine'.",
+                        "description": "Optional watcher name, e.g. 'email', 'markets' or 'feeds'.",
                     },
                     "limit": {"type": "integer", "description": "Max items (default 20)."},
                 },

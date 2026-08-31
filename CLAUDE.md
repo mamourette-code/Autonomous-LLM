@@ -21,7 +21,7 @@ in the background, would blur that line. Add to the correct half.
 uv pip install -e ".[dev]"       # install (pip install -e ".[dev]" works too)
 autonomous serve                 # web UI + watchers on 127.0.0.1:8000
 autonomous run "goal"            # one goal from the terminal
-autonomous poll marine           # poll a single watcher once
+autonomous poll markets          # poll a single watcher once
 pytest                           # full suite
 pytest tests/test_agent.py -k budget   # a single test
 ruff check . && ruff format .    # lint, then format
@@ -66,6 +66,14 @@ depends on:
    let a tool failure kill a run.
 2. *Arguments are filtered.* Models invent parameters; `_filter_args` drops any
    the function does not accept.
+
+**Panel.** `web/static/` is plain HTML/CSS/JS, no build step and no framework —
+keep it that way. `/api/markets` does the shaping (latest level per symbol, in
+configured order, plus headlines) so the front end just renders. Color roles are
+CSS custom properties defined for light, OS-dark and an explicit `data-theme`
+stamp; add new colors as roles, never as raw hex in a rule. Direction is encoded
+by arrow *and* sign *and* hue — never hue alone, and never red/green, which is
+the one pair severe CVD cannot separate.
 
 **Watchers.** Subclass `Watcher`: `name`, `interval_seconds`, `enabled`, and
 `async poll()` returning `Observation`s. Observations de-duplicate on

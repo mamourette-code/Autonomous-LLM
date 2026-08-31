@@ -18,7 +18,7 @@ from autonomous.storage import Database
 from autonomous.watchers.base import Watcher
 from autonomous.watchers.email import EmailWatcher
 from autonomous.watchers.feeds import FeedWatcher
-from autonomous.watchers.marine import MarineWatcher
+from autonomous.watchers.markets import MarketsWatcher
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ class Scheduler:
 def build_scheduler(settings: Settings, db: Database) -> Scheduler:
     watchers: list[Watcher] = [
         EmailWatcher(settings),
-        MarineWatcher(settings),
+        MarketsWatcher(settings),
         FeedWatcher(settings),
     ]
     return Scheduler(settings=settings, db=db, watchers=watchers)
