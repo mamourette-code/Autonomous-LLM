@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy to services.json and edit. Only environment variable NAMES go in here - never the secrets themselves. Writes are refused unless allow_writes is true.",
+  "services": [
+    {
+      "name": "github",
+      "description": "GitHub REST API",
+      "base_url": "https://api.github.com",
+      "auth": { "type": "bearer", "env": "GITHUB_TOKEN" },
+      "allow_writes": false
+    },
+    {
+      "name": "openweather",
+      "description": "Weather by coordinates",
+      "base_url": "https://api.openweathermap.org/data/2.5",
+      "auth": { "type": "query", "env": "OPENWEATHER_API_KEY", "name": "appid" },
+      "allow_writes": false
+    }
+  ]
+}

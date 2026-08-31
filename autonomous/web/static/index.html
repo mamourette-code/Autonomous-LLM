@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Autonomous-LLM</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <h1>Autonomous&#8209;LLM</h1>
+  <div id="status" class="status">connecting…</div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Run a task</h2>
+    <form id="run-form">
+      <textarea id="goal" rows="3" placeholder="e.g. Summarise what came into my inbox today and flag anything about the boat."></textarea>
+      <button type="submit" id="submit">Run</button>
+    </form>
+    <div id="run-detail" class="detail" hidden></div>
+  </section>
+
+  <section class="panel">
+    <h2>Recent runs</h2>
+    <ul id="runs" class="list"></ul>
+  </section>
+
+  <section class="panel">
+    <h2>Watcher feed</h2>
+    <div class="row">
+      <select id="source-filter"><option value="">all sources</option></select>
+      <span id="watcher-summary" class="muted"></span>
+    </div>
+    <ul id="feed" class="list"></ul>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
