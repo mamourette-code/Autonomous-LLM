@@ -144,6 +144,13 @@ h2 {
 .stream a:hover { color: var(--accent); text-decoration: underline; }
 .meta { display: block; font-size: .72rem; color: var(--ink-muted); margin-top: .12rem; }
 .empty, .hint { color: var(--ink-muted); font-size: .8rem; margin: 0; }
+.live { display: inline-flex; align-items: center; gap: .3rem;
+        font-size: .72rem; color: var(--ink-muted); }
+.link-button {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font: inherit; color: var(--accent); text-decoration: underline;
+}
+.link-button:hover { color: var(--ink); }
 li.click { cursor: pointer; }
 li.click:hover { background: var(--surface-2); }
 

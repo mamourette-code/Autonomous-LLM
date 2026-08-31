@@ -8,23 +8,33 @@ can poll their progress while they work.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from secrets import compare_digest
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from autonomous.agent import Agent
 from autonomous.config import Settings, get_settings
 from autonomous.errors import describe
+from autonomous.events import EventBus
 from autonomous.providers import ProviderError, build_provider
 from autonomous.storage import Database
 from autonomous.tools import build_registry
 from autonomous.watchers import build_scheduler
+from autonomous.web import auth
 
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -35,11 +45,46 @@ class RunRequest(BaseModel):
     provider: str | None = None
 
 
+def _install_auth(app: FastAPI, settings: Settings) -> None:
+    """Gate every route behind the shared token, and add the login endpoints."""
+    token = settings.auth_token or ""
+
+    @app.middleware("http")
+    async def require_token(request: Request, call_next):
+        path = request.url.path
+        if path.startswith(auth.PUBLIC_PATHS) or auth.is_authorised(request, token):
+            return await call_next(request)
+        if auth.wants_html(request):
+            return auth.redirect_to_login()
+        return JSONResponse({"detail": "authentication required"}, status_code=401)
+
+    @app.get("/login")
+    async def login_form(request: Request) -> Response:
+        if auth.is_authorised(request, token):
+            return RedirectResponse("/", status_code=303)
+        return auth.login_page()
+
+    @app.post("/login")
+    async def login(token_field: str = Form(alias="token", default="")) -> Response:
+        if not compare_digest(token_field, token):
+            return auth.login_page("That token was not accepted.", status_code=401)
+        response = RedirectResponse("/", status_code=303)
+        auth.set_session_cookie(response, token, secure=settings.cookie_secure)
+        return response
+
+    @app.post("/logout")
+    async def logout() -> Response:
+        response = RedirectResponse("/login", status_code=303)
+        response.delete_cookie(auth.COOKIE_NAME)
+        return response
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     db = Database(settings.db_path)
+    bus = EventBus()
     registry = build_registry(settings, db)
-    scheduler = build_scheduler(settings, db)
+    scheduler = build_scheduler(settings, db, bus)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -52,10 +97,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             db.close()
 
     app = FastAPI(title="Autonomous-LLM", version="0.1.0", lifespan=lifespan)
+
+    if settings.auth_token:
+        _install_auth(app, settings)
+    elif settings.host not in ("127.0.0.1", "localhost", "::1"):
+        log.warning(
+            "The panel is bound to %s with no AUTH_TOKEN set - anyone who can reach "
+            "port %s can read your watchers and spend your API credits.",
+            settings.host,
+            settings.port,
+        )
+
     app.state.settings = settings
     app.state.db = db
     app.state.registry = registry
     app.state.scheduler = scheduler
+    app.state.bus = bus
     # Runs in flight, so a page reload does not lose them.
     app.state.tasks: dict[int, asyncio.Task] = {}
 
@@ -64,8 +121,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             provider = build_provider(settings, provider_name)
         except ProviderError as exc:
             db.finish_run(run_id, status="failed", error=str(exc))
+            bus.publish("run.finished", run_id=run_id, status="failed", error=str(exc))
             return
-        agent = Agent(provider, registry, db, settings)
+        agent = Agent(provider, registry, db, settings, bus)
         await agent.run(goal, run_id=run_id)
 
     @app.get("/api/status")
@@ -144,6 +202,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=502, detail=describe(exc)) from exc
         return {"watcher": name, "new_observations": new}
+
+    @app.get("/api/stream")
+    async def stream(request: Request) -> StreamingResponse:
+        """Server-sent events: run steps and watcher polls, pushed as they happen."""
+
+        async def publisher():
+            async with bus.subscribe() as queue:
+                # An initial comment opens the stream immediately, so the browser
+                # reports "connected" without waiting for the first real event.
+                yield ": connected\n\n"
+                while True:
+                    if await request.is_disconnected():
+                        return
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=20.0)
+                    except TimeoutError:
+                        # Keep-alive: proxies drop a stream that goes quiet.
+                        yield ": keep-alive\n\n"
+                        continue
+                    yield f"event: {event.type}\ndata: {json.dumps(event.data, default=str)}\n\n"
+
+        return StreamingResponse(
+            publisher(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
 
     @app.get("/")
     async def index() -> FileResponse:

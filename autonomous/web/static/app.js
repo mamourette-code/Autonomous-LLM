@@ -133,8 +133,23 @@ async function loadMarkets() {
         link.rel = "noreferrer noopener";
       }
       li.appendChild(link);
-      li.appendChild(el("span", "meta", [item.source, relativeTime(item.observed_at)]
-        .filter(Boolean).join(" · ")));
+
+      const meta = el("span", "meta");
+      meta.appendChild(
+        document.createTextNode(
+          [item.source, relativeTime(item.observed_at)].filter(Boolean).join(" · ")
+        )
+      );
+      const ask = el("button", "link-button", "ask about this");
+      ask.type = "button";
+      ask.onclick = () => {
+        $("goal").value = `About this headline: "${item.title}"${item.url ? ` (${item.url})` : ""}\n\nWhat happened, and why does it matter for the market?`;
+        $("goal").focus();
+        $("goal").scrollIntoView({ behavior: "smooth", block: "center" });
+      };
+      meta.appendChild(document.createTextNode(" · "));
+      meta.appendChild(ask);
+      li.appendChild(meta);
       list.appendChild(li);
     }
   } catch (err) {
@@ -226,7 +241,8 @@ async function showRun(runId) {
 
   clearTimeout(runTimer);
   if (run.status === "running") {
-    runTimer = setTimeout(() => showRun(runId), 1500);
+    // The stream drives updates; this is only a safety net if it is down.
+    runTimer = setTimeout(() => showRun(runId), 5000);
   } else {
     loadRuns();
   }
@@ -305,10 +321,63 @@ $("refresh-markets").addEventListener("click", async (event) => {
   }
 });
 
+/* --- live updates ------------------------------------------------------
+   The server pushes run steps and watcher polls over SSE. Polling stays as a
+   fallback, but at a slow interval - the stream is the primary path. */
+let stream = null;
+let streamRetry = 1000;
+
+function setLive(state, detail) {
+  const dot = $("live-dot");
+  dot.className = `dot ${state}`;
+  dot.title = detail || (state === "ok" ? "Live" : "Reconnecting…");
+}
+
+function connectStream() {
+  if (stream) stream.close();
+  stream = new EventSource("/api/stream");
+
+  stream.onopen = () => {
+    streamRetry = 1000;
+    setLive("ok", "Live");
+  };
+
+  stream.onerror = () => {
+    setLive("bad", "Disconnected — retrying");
+    stream.close();
+    // Back off to a minute so a stopped server is not hammered.
+    streamRetry = Math.min(streamRetry * 2, 60000);
+    setTimeout(connectStream, streamRetry);
+  };
+
+  stream.addEventListener("run.started", loadRuns);
+  stream.addEventListener("run.step", (event) => {
+    const data = JSON.parse(event.data);
+    if (data.run_id === activeRun) showRun(data.run_id);
+  });
+  stream.addEventListener("run.finished", (event) => {
+    const data = JSON.parse(event.data);
+    if (data.run_id === activeRun) showRun(data.run_id);
+    loadRuns();
+  });
+  stream.addEventListener("watcher.polled", (event) => {
+    const data = JSON.parse(event.data);
+    if (data.new_observations > 0) {
+      loadFeed();
+      if (data.watcher === "markets") loadMarkets();
+    }
+    loadStatus();
+  });
+  stream.addEventListener("watcher.failed", loadStatus);
+}
+
 loadStatus();
 loadMarkets();
 loadRuns();
 loadFeed();
-setInterval(loadStatus, 15000);
-setInterval(loadMarkets, 60000);
-setInterval(loadFeed, 30000);
+connectStream();
+
+// Slow fallbacks in case the stream is cut by a proxy that buffers SSE.
+setInterval(loadStatus, 60000);
+setInterval(loadMarkets, 300000);
+setInterval(loadFeed, 300000);

@@ -67,6 +67,20 @@ depends on:
 2. *Arguments are filtered.* Models invent parameters; `_filter_args` drops any
    the function does not accept.
 
+**Events.** `events.py` is an in-process bus. The agent loop publishes
+`run.started` / `run.step` / `run.finished`; the scheduler publishes
+`watcher.polled` / `watcher.failed`; `/api/stream` relays them as SSE. Two
+properties to preserve: publishing never blocks and never raises (a dead
+subscriber must not break a run), and subscriber queues are bounded, dropping
+oldest — a browser tab that stops reading loses history, not liveness.
+
+**Auth.** Off when `AUTH_TOKEN` is unset, which is right for localhost. When
+set, a middleware gates everything except `/login`, `/healthz` and `/static/`.
+The session cookie holds a hash of the token, never the token, so a stolen
+cookie cannot be replayed as a bearer credential. Compare secrets only with
+`compare_digest`. Any new public path must be added to `auth.PUBLIC_PATHS`
+deliberately — think about what it exposes first.
+
 **Panel.** `web/static/` is plain HTML/CSS/JS, no build step and no framework —
 keep it that way. `/api/markets` does the shaping (latest level per symbol, in
 configured order, plus headlines) so the front end just renders. Color roles are

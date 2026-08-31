@@ -82,8 +82,17 @@ class Settings(BaseSettings):
     feed_poll_seconds: int = 1800
 
     # --- Web UI ------------------------------------------------------------
+    # 127.0.0.1 keeps the panel on this machine. Change it only together with
+    # auth_token - see the note there.
     host: str = "127.0.0.1"
     port: int = 8000
+
+    # Shared access token. Unset means no authentication, which is only safe
+    # while the panel is bound to localhost. Any other binding must set it.
+    auth_token: str | None = None
+    # Send the session cookie only over HTTPS. Turn this on once the panel is
+    # served over TLS (directly or behind a reverse proxy).
+    cookie_secure: bool = False
 
     @property
     def db_path(self) -> Path:

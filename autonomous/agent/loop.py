@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 from autonomous.config import Settings
 from autonomous.errors import describe
+from autonomous.events import EventBus
 from autonomous.providers.base import LLMProvider, Message, ProviderError
 from autonomous.storage import Database
 from autonomous.tools import ToolRegistry
@@ -55,11 +56,30 @@ class Agent:
         tools: ToolRegistry,
         db: Database,
         settings: Settings,
+        bus: EventBus | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
         self.db = db
         self.settings = settings
+        self.bus = bus
+
+    def _record(
+        self, run_id: int, step: int, kind: str, *, name: str | None = None, content: str = ""
+    ) -> None:
+        """Persist a step and push it to any live panel in one go."""
+        self.db.add_step(run_id, step, kind, name=name, content=content)
+        if self.bus:
+            self.bus.publish(
+                "run.step", run_id=run_id, step=step, kind=kind, name=name, content=content
+            )
+
+    def _finish(
+        self, run_id: int, status: str, *, result: str | None = None, error: str | None = None
+    ) -> None:
+        self.db.finish_run(run_id, status=status, result=result, error=error)
+        if self.bus:
+            self.bus.publish("run.finished", run_id=run_id, status=status, error=error)
 
     def _system_prompt(self) -> str:
         return SYSTEM_PROMPT.format(today=datetime.now(UTC).date().isoformat())
@@ -67,6 +87,8 @@ class Agent:
     async def run(self, goal: str, *, run_id: int | None = None) -> RunResult:
         if run_id is None:
             run_id = self.db.create_run(goal, self.provider.name, self.provider.model)
+        if self.bus:
+            self.bus.publish("run.started", run_id=run_id, goal=goal)
 
         messages: list[Message] = [Message(role="user", text=goal)]
         specs = self.tools.specs()
@@ -87,22 +109,22 @@ class Agent:
 
                 if not response.tool_calls:
                     answer = response.text.strip() or "(the model returned no text)"
-                    self.db.add_step(run_id, step, "answer", content=answer)
-                    self.db.finish_run(run_id, status="succeeded", result=answer)
+                    self._record(run_id, step, "answer", content=answer)
+                    self._finish(run_id, "succeeded", result=answer)
                     messages.append(Message(role="assistant", text=answer))
                     return RunResult(
                         run_id, "succeeded", answer, steps_used=step, transcript=messages
                     )
 
                 if response.text:
-                    self.db.add_step(run_id, step, "thought", content=response.text)
+                    self._record(run_id, step, "thought", content=response.text)
                 messages.append(
                     Message(role="assistant", text=response.text, tool_calls=response.tool_calls)
                 )
 
                 # The model may request several tools at once; run them together.
                 for call in response.tool_calls:
-                    self.db.add_step(
+                    self._record(
                         run_id,
                         step,
                         "tool_call",
@@ -113,7 +135,7 @@ class Agent:
                     *(self.tools.call(call.name, call.args) for call in response.tool_calls)
                 )
                 for call, result in zip(response.tool_calls, results, strict=True):
-                    self.db.add_step(run_id, step, "tool_result", name=call.name, content=result)
+                    self._record(run_id, step, "tool_result", name=call.name, content=result)
                     messages.append(
                         Message(role="tool", text=result, tool_name=call.name, tool_call_id=call.id)
                     )
@@ -122,11 +144,11 @@ class Agent:
                 f"Stopped after the {self.settings.max_steps}-step budget without reaching an "
                 "answer. Raise MAX_STEPS or narrow the goal."
             )
-            self.db.finish_run(run_id, status="failed", error=message)
+            self._finish(run_id, "failed", error=message)
             return RunResult(run_id, "failed", error=message, steps_used=step, transcript=messages)
 
         except Exception as exc:
             log.exception("run %s failed", run_id)
             error = describe(exc)
-            self.db.finish_run(run_id, status="failed", error=error)
+            self._finish(run_id, "failed", error=error)
             return RunResult(run_id, "failed", error=error, steps_used=step, transcript=messages)

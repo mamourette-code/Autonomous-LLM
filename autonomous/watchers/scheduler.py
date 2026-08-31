@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 
 from autonomous.config import Settings
 from autonomous.errors import describe
+from autonomous.events import EventBus
 from autonomous.storage import Database
 from autonomous.watchers.base import Watcher
 from autonomous.watchers.email import EmailWatcher
@@ -42,6 +43,7 @@ class Scheduler:
     settings: Settings
     db: Database
     watchers: list[Watcher] = field(default_factory=list)
+    bus: EventBus | None = None
     status: dict[str, WatcherStatus] = field(default_factory=dict)
     _tasks: list[asyncio.Task] = field(default_factory=list)
 
@@ -83,6 +85,8 @@ class Scheduler:
             status.total_polls += 1
             status.last_poll = datetime.now(UTC).isoformat(timespec="seconds")
             log.warning("watcher %s failed: %s", watcher.name, status.last_error)
+            if self.bus:
+                self.bus.publish("watcher.failed", watcher=watcher.name, error=status.last_error)
             raise
 
         new = self.db.add_observations(
@@ -102,6 +106,8 @@ class Scheduler:
         status.total_polls += 1
         status.new_observations += new
         log.info("watcher %s: %d observed, %d new", watcher.name, len(observations), new)
+        if self.bus:
+            self.bus.publish("watcher.polled", watcher=watcher.name, new_observations=new)
         return new
 
     async def _loop(self, watcher: Watcher) -> None:
@@ -121,10 +127,10 @@ class Scheduler:
             await asyncio.sleep(delay)
 
 
-def build_scheduler(settings: Settings, db: Database) -> Scheduler:
+def build_scheduler(settings: Settings, db: Database, bus: EventBus | None = None) -> Scheduler:
     watchers: list[Watcher] = [
         EmailWatcher(settings),
         MarketsWatcher(settings),
         FeedWatcher(settings),
     ]
-    return Scheduler(settings=settings, db=db, watchers=watchers)
+    return Scheduler(settings=settings, db=db, watchers=watchers, bus=bus)

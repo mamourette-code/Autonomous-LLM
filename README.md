@@ -55,6 +55,8 @@ switches itself off.
 | `MARKETS_SYMBOLS` / `MARKETS_FEED_URLS` | The markets watcher. On by default, keyless |
 | `IMAP_HOST` / `IMAP_USER` / `IMAP_PASSWORD` | Enables the email watcher (read-only) |
 | `FEED_URLS` | Any other RSS/Atom feeds to watch |
+| `AUTH_TOKEN` | Required to sign in. **Set this before exposing the panel** |
+| `HOST` / `PORT` | Where the panel binds. Default is localhost only |
 | `BROWSER_ENABLED` | Headless-browser page reading |
 | `BROWSER_ACTIONS_ENABLED` | Lets the agent click, type and submit forms |
 
@@ -76,12 +78,35 @@ Then set `BROWSER_ENABLED=true`. Acting on pages (`browser_interact`) additional
 needs `BROWSER_ACTIONS_ENABLED=true`; it is off by default because it operates on
 real sites under your identity.
 
+## Exposing the panel
+
+By default the panel binds to `127.0.0.1` and has no authentication, which is
+correct for a panel only you can reach. **The moment it listens on anything
+else, set `AUTH_TOKEN`** — the panel can read your inbox, spend your API
+credits and call every service you configured.
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # generate one
+echo 'AUTH_TOKEN=<paste it>' >> .env
+```
+
+With a token set, the browser gets a login form and a signed HttpOnly session
+cookie; scripts can use `Authorization: Bearer <token>`. The cookie stores a
+hash of the token, never the token itself. Put the panel behind HTTPS
+(a reverse proxy is fine) and set `COOKIE_SECURE=true`. `/healthz` stays open
+for health checks.
+
 ## The markets panel
 
 The panel leads with a KPI row: one stat tile per symbol showing the level, the
 change against the **prior session's close**, and a sparkline of the last month
 of daily closes. Symbols are Yahoo Finance tickers, so anything that site quotes
 works — indices, FX pairs, futures, crypto.
+
+The panel updates over a server-sent event stream: run steps appear as they
+happen and the market tiles refresh when a watcher polls, with slow polling as
+a fallback if a proxy buffers the stream. The dot beside "live" shows the
+connection.
 
 Direction is shown three ways at once — an arrow, a signed number, and hue — so
 it never depends on color alone. The up/down hues are blue and red rather than
