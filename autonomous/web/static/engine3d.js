@@ -12,6 +12,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RectAreaLightUniformsLib } from "three/addons/lights/RectAreaLightUniformsLib.js";
 
 const BANK_ANGLE = Math.PI / 4; // 45 degrees each side => a 90-degree V
 const CYL_PER_BANK = 4;
@@ -31,6 +32,38 @@ const COLORS = {
   goldBright: 0xe6b552,
   accent: 0x4f9bf0,
 };
+
+/** A twill carbon weave, drawn once and tiled. */
+function carbonTexture(repeat = 8) {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#0c0d0f";
+  ctx.fillRect(0, 0, size, size);
+  const cell = size / 8;
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      // Twill: the tow direction alternates in 2x2 blocks.
+      const over = (Math.floor(x / 2) + Math.floor(y / 2)) % 2 === 0;
+      const g = ctx.createLinearGradient(
+        x * cell, y * cell,
+        over ? (x + 1) * cell : x * cell,
+        over ? y * cell : (y + 1) * cell
+      );
+      g.addColorStop(0, "#25272b");
+      g.addColorStop(0.5, "#101215");
+      g.addColorStop(1, "#25272b");
+      ctx.fillStyle = g;
+      ctx.fillRect(x * cell + 0.5, y * cell + 0.5, cell - 1, cell - 1);
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(repeat, repeat);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
 
 function material(color, metalness, roughness, extra = {}) {
   return new THREE.MeshStandardMaterial({ color, metalness, roughness, ...extra });
@@ -61,28 +94,141 @@ function buildEnvironment(renderer) {
   return environment;
 }
 
-/** The gold intake plenum: a swept wing sitting in the valley. */
-function buildIntakeWing(materials) {
-  const shape = new THREE.Shape();
-  shape.moveTo(0, 0.42);
-  shape.bezierCurveTo(1.1, 0.5, 2.3, 0.28, 3.0, -0.22);
-  shape.lineTo(3.0, -0.52);
-  shape.bezierCurveTo(2.2, -0.16, 1.0, 0.02, 0, -0.06);
-  shape.closePath();
+/**
+ * The signature gold intake: two wings sweeping out from a central spine,
+ * their surfaces broken by radiating ribs.
+ *
+ * Orientation is resolved once, in the geometry: rotateY(-PI/2) puts the
+ * profile's spread along +Z (across the engine) and the extrusion along X
+ * (its length). Everything after that is placed in world axes, so the ribs and
+ * the shell cannot drift onto different axes.
+ */
+function buildIntakeWings(materials, length) {
+  const wings = new THREE.Group();
+  const SPREAD = 1.62;
 
-  const geometry = new THREE.ExtrudeGeometry(shape, {
-    depth: 0.5,
-    bevelEnabled: true,
-    bevelSize: 0.09,
-    bevelThickness: 0.09,
-    bevelSegments: 4,
-    curveSegments: 24,
-  });
-  geometry.center();
+  // Raised spine down the centre, where the two wings meet.
+  const spine = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.3, 0.36, length * 1.02, 20, 1, false, 0, Math.PI),
+    materials.goldDark
+  );
+  spine.rotation.z = Math.PI / 2;
+  spine.rotation.y = Math.PI;
+  spine.position.y = 0.06;
+  spine.castShadow = true;
+  wings.add(spine);
 
-  const wing = new THREE.Mesh(geometry, materials.gold);
-  wing.castShadow = true;
-  return wing;
+  for (const side of [-1, 1]) {
+    const wing = new THREE.Group();
+
+    // Profile across the wing: rises at the spine, droops to the tip.
+    const profile = new THREE.Shape();
+    profile.moveTo(0, 0.22);
+    profile.quadraticCurveTo(SPREAD * 0.55, 0.17, SPREAD, -0.4);
+    profile.lineTo(SPREAD, -0.56);
+    profile.quadraticCurveTo(SPREAD * 0.55, -0.02, 0, -0.06);
+    profile.closePath();
+
+    const geometry = new THREE.ExtrudeGeometry(profile, {
+      depth: length,
+      bevelEnabled: true,
+      bevelSize: 0.045,
+      bevelThickness: 0.045,
+      bevelSegments: 3,
+      curveSegments: 26,
+    });
+    geometry.translate(0, 0, -length / 2);
+    geometry.rotateY(-Math.PI / 2); // spread -> +Z, length -> X
+
+    // Sweep: narrow the spread toward each end so the pair reads as wings
+    // rather than a flat roof.
+    const position = geometry.attributes.position;
+    for (let v = 0; v < position.count; v += 1) {
+      const along = Math.abs(position.getX(v)) / (length / 2); // 0 centre, 1 tip
+      const taper = 1 - 0.62 * along ** 1.7;
+      position.setZ(v, position.getZ(v) * taper);
+      position.setY(v, position.getY(v) - 0.07 * along ** 2);
+    }
+    position.needsUpdate = true;
+    geometry.computeVertexNormals();
+
+    const shell = new THREE.Mesh(geometry, materials.gold);
+    shell.castShadow = true;
+    wing.add(shell);
+
+    // Ribs fanning along the wing: each runs outward across the spread,
+    // spaced down the engine's length.
+    const ribCount = 12;
+    for (let i = 0; i < ribCount; i += 1) {
+      const t = i / (ribCount - 1);
+      const rib = new THREE.Mesh(
+        new THREE.BoxGeometry(0.075, 0.05, SPREAD * 0.94),
+        materials.goldBright
+      );
+      const along = Math.abs(t - 0.5) * 2;
+      const taper = 1 - 0.62 * along ** 1.7;
+      rib.scale.z = taper;
+      rib.position.set(
+        (t - 0.5) * length * 0.92,
+        0.1 - 0.07 * along ** 2,
+        SPREAD * 0.5 * taper
+      );
+      // Splay outward from the centre of the wing, and follow the droop.
+      rib.rotation.y = (t - 0.5) * 0.5;
+      rib.rotation.x = 0.2;
+      wing.add(rib);
+    }
+
+    wing.scale.z = side;
+    wings.add(wing);
+  }
+
+  return wings;
+}
+
+/** A carbon airbox: the big soft-cornered boxes flanking the intake. */
+function buildAirbox(materials, length) {
+  const box = new THREE.Group();
+
+  const shell = new THREE.Mesh(
+    new THREE.BoxGeometry(length, 0.78, 0.74, 4, 3, 3),
+    materials.carbonWeave
+  );
+  shell.castShadow = true;
+  shell.receiveShadow = true;
+  box.add(shell);
+
+  // Rounded shoulders, so it does not read as a plain cuboid.
+  for (const sz of [-1, 1]) {
+    const shoulder = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.27, 0.27, length, 20, 1, false, 0, Math.PI),
+      materials.carbonWeave
+    );
+    shoulder.rotation.z = Math.PI / 2;
+    shoulder.rotation.x = sz > 0 ? 0 : Math.PI;
+    shoulder.position.set(0, 0.27, sz * 0.2);
+    box.add(shoulder);
+  }
+
+  // The little gold maker's plate.
+  const plate = new THREE.Mesh(
+    new THREE.BoxGeometry(length * 0.38, 0.12, 0.03),
+    materials.goldBright
+  );
+  plate.position.set(0, -0.08, 0.38);
+  box.add(plate);
+
+  // End caps and a feed stub.
+  for (const sx of [-1, 1]) {
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.26, 0.14, 20),
+      materials.darkMetal
+    );
+    cap.rotation.z = Math.PI / 2;
+    cap.position.x = sx * (length / 2 + 0.06);
+    box.add(cap);
+  }
+  return box;
 }
 
 function buildTurbo(materials) {
@@ -131,18 +277,21 @@ export function createEngine({ container, onSelect, onHover }) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.5;
+  renderer.toneMappingExposure = 1.38;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
   renderer.domElement.style.display = "block";
   renderer.domElement.style.touchAction = "none";
 
+  // Area lights need their lookup tables initialised before first use.
+  RectAreaLightUniformsLib.init();
+
   const scene = new THREE.Scene();
   scene.environment = buildEnvironment(renderer);
 
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
-  camera.position.set(6.0, 3.4, 7.0);
+  camera.position.set(1.8, 4.4, 8.8);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -150,12 +299,17 @@ export function createEngine({ container, onSelect, onHover }) {
   controls.minDistance = 5;
   controls.maxDistance = 18;
   controls.maxPolarAngle = Math.PI * 0.85;
-  controls.target.set(0, 0.6, 0);
+  controls.target.set(0, 1.5, 0);
 
   // --- lighting: a dark studio, keyed from above with rims on both flanks ---
-  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-  const key = new THREE.DirectionalLight(0xffffff, 3.4);
-  key.position.set(5, 10, 6);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.34));
+  // A broad softbox overhead: this is what lights the gold.
+  const softbox = new THREE.RectAreaLight(0xfff4e2, 4.2, 7, 3.4);
+  softbox.position.set(0, 6.4, 1.6);
+  softbox.lookAt(0, 2.4, 0);
+  scene.add(softbox);
+  const key = new THREE.DirectionalLight(0xfff2dd, 2.6);
+  key.position.set(2, 11, 4);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
   key.shadow.camera.near = 1;
@@ -174,12 +328,39 @@ export function createEngine({ container, onSelect, onHover }) {
   fill.position.set(-4, 1.5, 7);
   scene.add(fill);
 
+  const weave = carbonTexture(6);
   const materials = {
-    metal: material(COLORS.metal, 0.95, 0.32),
-    darkMetal: material(COLORS.darkMetal, 0.9, 0.42),
-    carbon: material(COLORS.carbon, 0.45, 0.55),
-    gold: material(COLORS.gold, 1.0, 0.26),
-    bright: material(0x9fb0c0, 1.0, 0.18),
+    metal: material(0x2b2e33, 0.75, 0.58),
+    darkMetal: material(COLORS.darkMetal, 0.92, 0.4),
+    carbon: material(COLORS.carbon, 0.5, 0.5),
+    carbonWeave: new THREE.MeshPhysicalMaterial({
+      map: weave,
+      color: 0xffffff,
+      metalness: 0.35,
+      roughness: 0.36,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.18,
+    }),
+    // Anodised gold under lacquer - the reference's one saturated colour.
+    gold: new THREE.MeshPhysicalMaterial({
+      color: COLORS.gold,
+      metalness: 1.0,
+      roughness: 0.22,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.08,
+    }),
+    goldBright: new THREE.MeshPhysicalMaterial({
+      color: COLORS.goldBright,
+      metalness: 1.0,
+      roughness: 0.14,
+      clearcoat: 1.0,
+    }),
+    goldDark: new THREE.MeshPhysicalMaterial({
+      color: 0x8f6620,
+      metalness: 1.0,
+      roughness: 0.3,
+    }),
+    bright: material(0x6f7a86, 0.9, 0.38),
     idle: material(0x2a2d30, 0.8, 0.6),
   };
   materials.goldGlow = material(COLORS.goldBright, 1.0, 0.24, {
@@ -281,9 +462,9 @@ export function createEngine({ container, onSelect, onHover }) {
       trumpet.position.y = 0.5;
       runner.add(trumpet);
 
-      const runnerBase = axis.clone().multiplyScalar(2.95);
-      // Runners lean inward, toward the plenum in the valley.
-      runnerBase.z -= side * 0.35;
+      const runnerBase = axis.clone().multiplyScalar(2.72);
+      // Outboard of the gold, so the wings stay unbroken.
+      runnerBase.z += side * 0.34;
       runner.position.copy(runnerBase);
       runner.rotation.x = -side * (BANK_ANGLE * 0.55);
       group.add(runner);
@@ -345,23 +526,47 @@ export function createEngine({ container, onSelect, onHover }) {
 
   // --- gold intake plenum in the valley ---------------------------------
   // The signature gold plenum, seated down between the banks.
-  // A swept wing each side of a central throttle body, running the length of
-  // the engine rather than across it.
-  const wingScale = new THREE.Vector3((spanX + 0.4) / 3.0, 0.8, 1.5);
-  for (const side of [-1, 1]) {
-    const wing = buildIntakeWing(materials);
-    wing.scale.copy(wingScale);
-    wing.scale.z *= side;
-    wing.position.set(0, 2.6, side * 0.42);
-    engine.add(wing);
-  }
+  // The gold butterfly, seated across the valley.
+  const wings = buildIntakeWings(materials, spanX * 0.86);
+  wings.position.set(0, 2.86, 0);
+  engine.add(wings);
 
-  const throttleBody = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.34, 0.4, 0.5, 24),
+  // The dark plenum body the wings sit on.
+  const plenumBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.5, 0.72, spanX * 0.88, 24, 1, false, 0, Math.PI),
     materials.darkMetal
   );
-  throttleBody.position.set(0, 3.05, 0);
+  plenumBody.rotation.z = Math.PI / 2;
+  plenumBody.rotation.y = Math.PI;
+  plenumBody.position.set(0, 1.92, 0);
+  plenumBody.castShadow = true;
+  engine.add(plenumBody);
+
+  const throttleBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.3, 0.36, 0.42, 24),
+    materials.bright
+  );
+  throttleBody.position.set(0, 3.24, 0);
   engine.add(throttleBody);
+
+  // Carbon airboxes flanking the intake, as in the reference.
+  for (const side of [-1, 1]) {
+    const airbox = buildAirbox(materials, spanX * 0.78);
+    airbox.position.set(0, 1.15, side * 2.5);
+    airbox.rotation.x = side * 0.16;
+    airbox.rotation.y = side < 0 ? Math.PI : 0;
+    engine.add(airbox);
+
+    // A crossover pipe from the airbox back toward the plenum.
+    const pipe = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.19, 0.19, 1.5, 16),
+      materials.carbonWeave
+    );
+    pipe.rotation.x = Math.PI / 2;
+    pipe.rotation.z = side * 0.5;
+    pipe.position.set(side * (spanX * 0.34), 2.25, side * 1.25);
+    engine.add(pipe);
+  }
 
   // --- turbos, outboard on each flank -----------------------------------
   const turbos = [];

@@ -129,6 +129,13 @@ Things that will bite:
   cylinders sit at different heights. Tested via `pistonHeights()`.
 - Every failure path must fall back to the CSS cylinder row rather than leaving
   a dead panel; `createEngine` throwing is expected on a machine without WebGL.
+- Addons pull in their own addons: `RectAreaLightUniformsLib` needs
+  `RectAreaLightTexturesLib` beside it. Vendor the whole chain, and check the
+  browser network tab for a 404 rather than guessing when the stage goes blank.
+- Orientation is resolved once, in the geometry (`geometry.rotateY(-PI/2)` puts
+  the intake profile's spread on +Z and its length on X). Do not mix that with
+  per-mesh group rotations; the first attempt had the shell on one axis and its
+  ribs on another and rendered as spikes.
 
 **Panel.** The rest of `web/static/` is plain HTML/CSS/JS, no build step and no
 framework — keep it that way. `/api/markets` does the shaping (latest level per symbol, in
