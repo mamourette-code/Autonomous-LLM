@@ -41,6 +41,9 @@ class Recorder:
 
 
 def engine(settings, db, rules, recorder):
+    # Rules ship switched off - the daily brief is the default update path -
+    # so these tests turn them on explicitly.
+    settings.rules_enabled = True
     return RuleEngine(rules, settings, db, recorder)
 
 
@@ -179,14 +182,19 @@ async def test_manual_runs_do_not_consume_the_automatic_budget(settings, db):
     assert await engine(settings, db, [rule], recorder).react("markets", [headline("Fed")]) != []
 
 
-async def test_rules_can_be_switched_off(settings, db):
-    settings.rules_enabled = False
+async def test_rules_are_off_by_default(settings, db):
+    """Shipping default: the daily brief updates you, not unprompted runs."""
+    assert settings.rules_enabled is False
     recorder = Recorder()
     rule = Rule(name="r", goal="g", kind="headline", title_matches=["fed"])
-    assert await engine(settings, db, [rule], recorder).react("markets", [headline("Fed")]) == []
+    off = RuleEngine([rule], settings, db, recorder)
+
+    assert await off.react("markets", [headline("Fed")]) == []
+    assert recorder.started == []
 
 
 async def test_a_failing_rule_does_not_stop_the_others(settings, db):
+    settings.rules_enabled = True
     calls: list[str] = []
 
     async def flaky(goal: str, trigger: str) -> int:

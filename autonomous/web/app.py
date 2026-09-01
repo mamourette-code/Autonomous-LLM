@@ -27,6 +27,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from autonomous.agent import Agent
+from autonomous.branches import load_branches
+from autonomous.brief import BriefGenerator
 from autonomous.config import REPO_ROOT, Settings, get_settings
 from autonomous.errors import describe
 from autonomous.events import EventBus
@@ -40,6 +42,7 @@ from autonomous.web import auth
 log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 RULES_FILE = REPO_ROOT / "rules.json"
+BRANCHES_FILE = REPO_ROOT / "branches.json"
 
 
 class RunRequest(BaseModel):
@@ -86,16 +89,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     db = Database(settings.db_path)
     bus = EventBus()
     registry = build_registry(settings, db)
-    scheduler = build_scheduler(settings, db, bus)
+    branches = load_branches(BRANCHES_FILE)
+    scheduler = build_scheduler(settings, db, bus, branches)
     rules = load_rules(RULES_FILE)
+
+    async def _generate_brief(force: bool = False) -> list[Any]:
+        """One completion per branch. Cheap because the watchers already fetched."""
+        provider = build_provider(settings)
+        generator = BriefGenerator(provider, db, settings, branches, bus)
+        return await generator.run(force=force)
+
+    async def _brief_daily() -> None:
+        """Brief on start - the service starts at login - then once a day."""
+        await asyncio.sleep(settings.daily_brief_startup_delay_seconds)
+        while True:
+            try:
+                await _generate_brief()
+            except ProviderError as exc:
+                log.warning("daily brief skipped: %s", exc)
+            except Exception:
+                log.exception("daily brief failed")
+            await asyncio.sleep(24 * 60 * 60)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        brief_task: asyncio.Task | None = None
         if settings.watchers_enabled:
             scheduler.start()
+        if settings.daily_brief_enabled:
+            brief_task = asyncio.create_task(_brief_daily(), name="daily-brief")
         try:
             yield
         finally:
+            if brief_task:
+                brief_task.cancel()
             await scheduler.stop()
             db.close()
 
@@ -194,6 +221,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def observations(limit: int = 100, source: str | None = None) -> list[dict[str, Any]]:
         return db.list_observations(limit=min(limit, 500), source=source)
 
+    @app.get("/api/branches")
+    async def list_branches() -> dict[str, Any]:
+        """Every branch with its latest update - what the engine renders."""
+        latest = db.latest_briefs()
+        out = []
+        for branch in branches:
+            brief = latest.get(branch.slug)
+            status = scheduler.status.get(branch.slug)
+            out.append(
+                {
+                    **branch.as_dict(),
+                    "focus": branch.focus,
+                    "brief": brief["summary"] if brief else None,
+                    "brief_date": brief["brief_date"] if brief else None,
+                    "brief_sources": brief["sources"] if brief else 0,
+                    "last_poll": status.last_poll if status else None,
+                    "last_error": status.last_error if status else None,
+                }
+            )
+        return {"branches": out, "max_calls": settings.daily_brief_max_calls}
+
+    @app.post("/api/brief/run")
+    async def run_brief(force: bool = True) -> dict[str, Any]:
+        try:
+            sections = await _generate_brief(force=force)
+        except ProviderError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {
+            "sections": [{"branch": s.branch, "sources": s.sources} for s in sections],
+            "calls_budget": settings.daily_brief_max_calls,
+        }
+
     @app.get("/api/markets")
     async def markets() -> dict[str, Any]:
         """Latest level per symbol plus recent headlines, shaped for the panel."""
@@ -216,7 +275,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }
                 )
         # Keep the configured symbol order rather than whatever the DB returned.
-        order = {symbol: i for i, symbol in enumerate(settings.markets_symbols)}
+        markets = next((b for b in branches if b.slug == "markets"), None)
+        order = {symbol: i for i, symbol in enumerate(markets.symbols if markets else [])}
         quotes = sorted(latest.values(), key=lambda q: order.get(q["symbol"], 999))
         return {"quotes": quotes, "headlines": headlines[:40]}
 

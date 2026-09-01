@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Autonomous-LLM</title>
+<title>Autonomous</title>
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -21,53 +21,48 @@
 
 <main class="panel">
 
-  <section class="board" aria-labelledby="markets-heading">
+  <section class="board engine-board" aria-labelledby="engine-heading">
     <div class="board-head">
-      <h2 id="markets-heading">Markets</h2>
-      <span class="board-meta" id="markets-updated"></span>
+      <h2 id="engine-heading">Daily brief</h2>
+      <div class="board-actions">
+        <span class="board-meta" id="brief-meta"></span>
+        <button type="button" class="ghost" id="refresh-brief">Regenerate</button>
+      </div>
     </div>
-    <div id="quotes" class="tiles" role="list">
-      <p class="empty">Waiting for the first poll…</p>
+
+    <div class="engine">
+      <div class="bank" id="engine" role="tablist" aria-label="Branches of interest">
+        <!-- cylinders injected here -->
+      </div>
     </div>
+    <p class="hint engine-hint">Hover a cylinder to raise it · click to read that branch</p>
   </section>
 
-  <div class="columns">
-    <section class="board" aria-labelledby="headlines-heading">
-      <div class="board-head">
-        <h2 id="headlines-heading">Headlines</h2>
-        <button type="button" class="ghost" id="refresh-markets">Refresh</button>
-      </div>
-      <ul id="headlines" class="stream"></ul>
-    </section>
-
-    <section class="board" aria-labelledby="task-heading">
-      <div class="board-head"><h2 id="task-heading">Run a task</h2></div>
-      <form id="run-form">
-        <textarea id="goal" rows="3"
-          placeholder="e.g. Summarise this morning's market headlines and flag anything about rates."></textarea>
-        <div class="form-row">
-          <button type="submit" id="submit">Run</button>
-          <span class="hint" id="run-hint"></span>
-        </div>
-      </form>
-      <div id="run-detail" class="transcript" hidden></div>
-      <h3 class="subhead">Recent runs</h3>
-      <ul id="runs" class="stream compact"></ul>
-
-      <h3 class="subhead">Reacting automatically</h3>
-      <p class="hint" id="rules-summary">…</p>
-      <ul id="rules" class="stream compact"></ul>
-    </section>
-  </div>
-
-  <section class="board" aria-labelledby="feed-heading">
+  <section class="board" id="branch-board" aria-labelledby="branch-heading" hidden>
     <div class="board-head">
-      <h2 id="feed-heading">Watcher feed</h2>
-      <select id="source-filter" aria-label="Filter by source">
-        <option value="">all sources</option>
-      </select>
+      <h2 id="branch-heading">Branch</h2>
+      <span class="board-meta" id="branch-meta"></span>
     </div>
-    <ul id="feed" class="stream"></ul>
+    <div id="branch-brief" class="brief"></div>
+    <h3 class="subhead">Latest levels</h3>
+    <div id="branch-quotes" class="tiles"></div>
+    <h3 class="subhead">Sources</h3>
+    <ul id="branch-sources" class="stream"></ul>
+  </section>
+
+  <section class="board" aria-labelledby="task-heading">
+    <div class="board-head"><h2 id="task-heading">Ask something</h2></div>
+    <form id="run-form">
+      <textarea id="goal" rows="2"
+        placeholder="e.g. Dig into why the Nasdaq fell today."></textarea>
+      <div class="form-row">
+        <button type="submit" id="submit">Run</button>
+        <span class="hint" id="run-hint"></span>
+      </div>
+    </form>
+    <div id="run-detail" class="transcript" hidden></div>
+    <h3 class="subhead">Recent runs</h3>
+    <ul id="runs" class="stream compact"></ul>
   </section>
 
 </main>

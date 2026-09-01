@@ -1,0 +1,49 @@
+{
+  "_comment": "Copy to branches.json to change your branches. Each branch is a cylinder in the panel's engine. Add one and a cylinder appears. 'feeds' are RSS/Atom URLs, 'symbols' are Yahoo Finance tickers (optional), 'focus' steers the daily brief. Set enabled:false to park a branch without deleting it.",
+  "branches": [
+    {
+      "slug": "markets",
+      "name": "Financial Markets",
+      "tagline": "indices, FX, commodities",
+      "symbols": [
+        "^GSPC",
+        "^IXIC",
+        "^DJI",
+        "^FTSE",
+        "^STOXX50E",
+        "EURUSD=X",
+        "GC=F",
+        "CL=F",
+        "BTC-USD"
+      ],
+      "feeds": [
+        "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+        "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
+        "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines"
+      ],
+      "focus": "Where the major indices stand and what moved them. Lead with the levels, then the one or two stories that explain the day."
+    },
+    {
+      "slug": "tech",
+      "name": "Technology & AI",
+      "tagline": "launches, models, funding",
+      "feeds": [
+        "https://techcrunch.com/feed/",
+        "https://www.theverge.com/rss/index.xml",
+        "https://arstechnica.com/feed/"
+      ],
+      "focus": "What actually shipped or changed - releases, launches, funding, notable research. Skip opinion pieces, reviews and rumour."
+    },
+    {
+      "slug": "world",
+      "name": "World & Geopolitics",
+      "tagline": "conflict, policy, energy",
+      "feeds": [
+        "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "https://www.aljazeera.com/xml/rss/all.xml",
+        "https://rss.dw.com/rdf/rss-en-world"
+      ],
+      "focus": "The developments that change something - conflict, elections, trade, energy. Say why each matters, not just that it happened."
+    }
+  ]
+}

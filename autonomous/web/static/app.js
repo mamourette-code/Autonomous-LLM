@@ -106,54 +106,133 @@ function quoteTile(quote) {
   return tile;
 }
 
-async function loadMarkets() {
+let branches = [];
+let activeBranch = null;
+
+/** Very small markdown subset: bold, bullets, line breaks. Text is escaped first. */
+function renderBrief(text) {
+  const escaped = text
+    .replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c])
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/^\s*[-*]\s+/gm, "• ");
+  return escaped;
+}
+
+function cylinder(branch, index) {
+  const button = el("button", "cylinder");
+  button.type = "button";
+  button.setAttribute("role", "tab");
+  button.setAttribute("aria-selected", String(branch.slug === activeBranch));
+  button.dataset.slug = branch.slug;
+  // A cylinder fires when it has an update to show.
+  if (branch.brief) button.classList.add("fired");
+  else button.classList.add("idle");
+
+  button.appendChild(el("span", "spark-plug"));
+  const bore = el("span", "bore");
+  bore.appendChild(el("span", "piston"));
+  button.appendChild(bore);
+
+  const label = el("span", "cyl-label");
+  label.appendChild(el("b", null, branch.name));
+  label.appendChild(el("span", null, branch.tagline || `cylinder ${index + 1}`));
+  button.appendChild(label);
+
+  button.title = branch.brief
+    ? `${branch.name} — updated ${branch.brief_date}`
+    : `${branch.name} — no update yet`;
+  button.onclick = () => selectBranch(branch.slug);
+  return button;
+}
+
+async function loadBranches(keepSelection = true) {
   try {
-    const { quotes, headlines } = await api("/api/markets");
-
-    const tiles = $("quotes");
-    tiles.innerHTML = "";
-    if (!quotes.length) {
-      tiles.appendChild(el("p", "empty", "Waiting for the first poll…"));
-    } else {
-      for (const quote of quotes) tiles.appendChild(quoteTile(quote));
-      $("markets-updated").textContent = `updated ${relativeTime(quotes[0].observed_at)}`;
+    const data = await api("/api/branches");
+    branches = data.branches;
+    if (!keepSelection || !branches.some((b) => b.slug === activeBranch)) {
+      activeBranch = null;
     }
 
-    const list = $("headlines");
-    list.innerHTML = "";
-    if (!headlines.length) {
-      list.appendChild(el("li", "empty", "No market headlines collected yet."));
-    }
-    for (const item of headlines) {
-      const li = el("li");
-      const link = el("a", null, item.title);
-      if (item.url) {
-        link.href = item.url;
-        link.target = "_blank";
-        link.rel = "noreferrer noopener";
-      }
-      li.appendChild(link);
+    const engine = $("engine");
+    engine.innerHTML = "";
+    branches.forEach((branch, i) => engine.appendChild(cylinder(branch, i)));
 
-      const meta = el("span", "meta");
-      meta.appendChild(
-        document.createTextNode(
-          [item.source, relativeTime(item.observed_at)].filter(Boolean).join(" · ")
-        )
-      );
-      const ask = el("button", "link-button", "ask about this");
-      ask.type = "button";
-      ask.onclick = () => {
-        $("goal").value = `About this headline: "${item.title}"${item.url ? ` (${item.url})` : ""}\n\nWhat happened, and why does it matter for the market?`;
-        $("goal").focus();
-        $("goal").scrollIntoView({ behavior: "smooth", block: "center" });
-      };
-      meta.appendChild(document.createTextNode(" · "));
-      meta.appendChild(ask);
-      li.appendChild(meta);
-      list.appendChild(li);
-    }
+    const withBrief = branches.filter((b) => b.brief);
+    $("brief-meta").textContent = withBrief.length
+      ? `${withBrief.length}/${branches.length} branches updated · ${withBrief[0].brief_date}`
+      : "no update yet today";
+
+    if (activeBranch) renderBranch(activeBranch);
   } catch (err) {
-    $("markets-updated").textContent = `unavailable: ${err.message}`;
+    $("brief-meta").textContent = `unavailable: ${err.message}`;
+  }
+}
+
+function selectBranch(slug) {
+  activeBranch = activeBranch === slug ? null : slug;
+  for (const button of document.querySelectorAll(".cylinder")) {
+    button.setAttribute("aria-selected", String(button.dataset.slug === activeBranch));
+  }
+  if (!activeBranch) {
+    $("branch-board").hidden = true;
+    return;
+  }
+  renderBranch(activeBranch);
+}
+
+async function renderBranch(slug) {
+  const branch = branches.find((b) => b.slug === slug);
+  if (!branch) return;
+
+  $("branch-board").hidden = false;
+  $("branch-heading").textContent = branch.name;
+  $("branch-meta").textContent = branch.brief_date
+    ? `updated ${branch.brief_date} · from ${branch.brief_sources} sources`
+    : "waiting for the first brief";
+
+  const box = $("branch-brief");
+  box.innerHTML = branch.brief
+    ? renderBrief(branch.brief)
+    : '<span class="placeholder">No update yet. The brief runs shortly after start, ' +
+      'or press Regenerate.</span>';
+
+  // Quotes and sources come from what the watcher collected for this branch.
+  const [quotes, sources] = await Promise.all([
+    branch.symbols ? api(`/api/observations?limit=120&source=${encodeURIComponent(slug)}`) : [],
+    api(`/api/observations?limit=25&source=${encodeURIComponent(slug)}`),
+  ]);
+
+  const tiles = $("branch-quotes");
+  tiles.innerHTML = "";
+  const seen = new Set();
+  for (const item of quotes) {
+    const data = item.data || {};
+    if (data.kind !== "quote" || seen.has(data.symbol)) continue;
+    seen.add(data.symbol);
+    tiles.appendChild(quoteTile(data));
+  }
+  tiles.hidden = seen.size === 0;
+  tiles.previousElementSibling.hidden = seen.size === 0;
+
+  const list = $("branch-sources");
+  list.innerHTML = "";
+  const headlines = sources.filter((item) => (item.data || {}).kind !== "quote");
+  if (!headlines.length) {
+    list.appendChild(el("li", "empty", "Nothing collected yet."));
+  }
+  for (const item of headlines.slice(0, 12)) {
+    const li = el("li");
+    if (item.url) {
+      const link = el("a", null, item.title);
+      link.href = item.url;
+      link.target = "_blank";
+      link.rel = "noreferrer noopener";
+      li.appendChild(link);
+    } else {
+      li.appendChild(el("span", null, item.title));
+    }
+    li.appendChild(el("span", "meta", relativeTime(item.created_at)));
+    list.appendChild(li);
   }
 }
 
@@ -180,41 +259,9 @@ async function loadStatus() {
     }
     $("health-dot").className = `dot ${healthy ? "ok" : "bad"}`;
 
-    const filter = $("source-filter");
-    if (filter.options.length === 1) {
-      for (const watcher of status.watchers) filter.add(new Option(watcher.name, watcher.name));
-    }
   } catch (err) {
     $("health-dot").className = "dot bad";
     $("provider-chip").textContent = `offline: ${err.message}`;
-  }
-}
-
-async function loadRules() {
-  try {
-    const data = await api("/api/rules");
-    const list = $("rules");
-    list.innerHTML = "";
-
-    if (!data.rules.length) {
-      $("rules-summary").textContent =
-        "No rules configured. Copy rules.example.json to rules.json to have the agent react on its own.";
-      return;
-    }
-    const left = data.budget_per_day - data.budget_used;
-    $("rules-summary").textContent = data.enabled
-      ? `${data.rules.length} rule(s) · ${data.budget_used}/${data.budget_per_day} automatic runs used today${left === 0 ? " — budget spent" : ""}`
-      : "Rules are switched off (RULES_ENABLED=false).";
-
-    for (const rule of data.rules) {
-      const li = el("li");
-      li.appendChild(el("span", null, rule.name));
-      li.appendChild(el("span", "meta", `cooldown ${rule.cooldown_minutes}m`));
-      li.title = rule.goal;
-      list.appendChild(li);
-    }
-  } catch (err) {
-    $("rules-summary").textContent = `rules unavailable: ${err.message}`;
   }
 }
 
@@ -282,32 +329,6 @@ async function showRun(runId) {
   }
 }
 
-async function loadFeed() {
-  const source = $("source-filter").value;
-  const query = source ? `?limit=80&source=${encodeURIComponent(source)}` : "?limit=80";
-  const items = await api(`/api/observations${query}`);
-  const list = $("feed");
-  list.innerHTML = "";
-  if (!items.length) {
-    list.appendChild(el("li", "empty", "Nothing yet. Watchers write here as they poll."));
-    return;
-  }
-  for (const item of items) {
-    const li = el("li");
-    if (item.url) {
-      const link = el("a", null, item.title);
-      link.href = item.url;
-      link.target = "_blank";
-      link.rel = "noreferrer noopener";
-      li.appendChild(link);
-    } else {
-      li.appendChild(el("span", null, item.title));
-    }
-    li.appendChild(el("span", "meta", `${item.source} · ${relativeTime(item.created_at)}`));
-    list.appendChild(li);
-  }
-}
-
 $("run-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const goal = $("goal").value.trim();
@@ -339,19 +360,21 @@ $("goal").addEventListener("keydown", (event) => {
   }
 });
 
-$("source-filter").addEventListener("change", loadFeed);
-$("refresh-markets").addEventListener("click", async (event) => {
+$("refresh-brief").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   button.disabled = true;
-  button.textContent = "Refreshing…";
+  button.textContent = "Working…";
+  $("brief-meta").textContent = "generating…";
   try {
-    await api("/api/watchers/markets/poll", { method: "POST" });
-    await Promise.all([loadMarkets(), loadStatus(), loadFeed()]);
+    const result = await api("/api/brief/run", { method: "POST" });
+    await loadBranches();
+    $("brief-meta").textContent =
+      `${result.sections.length} branch(es) updated · budget ${result.calls_budget} calls`;
   } catch (err) {
-    $("markets-updated").textContent = `refresh failed: ${err.message}`;
+    $("brief-meta").textContent = `could not generate: ${err.message}`;
   } finally {
     button.disabled = false;
-    button.textContent = "Refresh";
+    button.textContent = "Regenerate";
   }
 });
 
@@ -384,10 +407,7 @@ function connectStream() {
     setTimeout(connectStream, streamRetry);
   };
 
-  stream.addEventListener("run.started", () => {
-    loadRuns();
-    loadRules();  // an automatic run consumes budget
-  });
+  stream.addEventListener("run.started", loadRuns);
   stream.addEventListener("run.step", (event) => {
     const data = JSON.parse(event.data);
     if (data.run_id === activeRun) showRun(data.run_id);
@@ -399,23 +419,18 @@ function connectStream() {
   });
   stream.addEventListener("watcher.polled", (event) => {
     const data = JSON.parse(event.data);
-    if (data.new_observations > 0) {
-      loadFeed();
-      if (data.watcher === "markets") loadMarkets();
-    }
+    if (data.new_observations > 0 && data.watcher === activeBranch) renderBranch(activeBranch);
     loadStatus();
   });
+  stream.addEventListener("brief.updated", () => loadBranches());
   stream.addEventListener("watcher.failed", loadStatus);
 }
 
 loadStatus();
-loadMarkets();
+loadBranches();
 loadRuns();
-loadRules();
-loadFeed();
 connectStream();
 
 // Slow fallbacks in case the stream is cut by a proxy that buffers SSE.
 setInterval(loadStatus, 60000);
-setInterval(loadMarkets, 300000);
-setInterval(loadFeed, 300000);
+setInterval(() => loadBranches(), 300000);

@@ -2,17 +2,16 @@
 
 A self-hosted autonomous assistant with two halves:
 
-- **Watchers** run continuously, polling sources you care about — financial
-  market levels and headlines, an IMAP inbox, any RSS/Atom feed — and writing
-  what they find to a local feed. They only ever *observe*: no model calls,
-  no actions.
+- **Watchers** run continuously, one per branch of interest, collecting market
+  levels and headlines into a local feed. They only ever *observe*: no model
+  calls, no actions — which is what makes the daily brief so cheap.
 - **Task runs** happen when *you* ask for one. A goal goes to an LLM that plans,
   calls tools (fetch a page, read a feed, call a configured API, drive a headless
   browser, read the watcher feed) and iterates until it can answer.
 
 Everything runs locally against a SQLite file. The panel at `127.0.0.1:8000`
-leads with market levels and headlines, starts task runs and shows each step as
-it happens.
+leads with an engine — one cylinder per branch of interest. Hover a cylinder and
+its piston rises; click it and you get that branch's update for the day.
 
 ## Quick start
 
@@ -71,7 +70,8 @@ switches itself off.
 | `IMAP_HOST` / `IMAP_USER` / `IMAP_PASSWORD` | Enables the email watcher (read-only) |
 | `FEED_URLS` | Any other RSS/Atom feeds to watch |
 | `AUTH_TOKEN` | Required to sign in. **Set this before exposing the panel** |
-| `RULES_ENABLED` / `MAX_AUTO_RUNS_PER_DAY` | Reactive rules and their daily cap |
+| `DAILY_BRIEF_ENABLED` / `DAILY_BRIEF_MAX_CALLS` | The daily brief and its call budget |
+| `RULES_ENABLED` / `MAX_AUTO_RUNS_PER_DAY` | Reactive rules (off by default) and their cap |
 | `HOST` / `PORT` | Where the panel binds. Default is localhost only |
 | `BROWSER_ENABLED` | Headless-browser page reading |
 | `BROWSER_ACTIONS_ENABLED` | Lets the agent click, type and submit forms |
@@ -113,9 +113,11 @@ is awake — and the panel is reachable only from that machine. If you want it
 genuinely always-on and reachable from your phone, it needs to live on a
 machine that stays up; the app is ready for that (see *Exposing the panel*).
 
-## Reacting on its own
+## Reacting on its own (off by default)
 
-Rules turn a new observation into an agent run without you being there. Copy
+The daily brief is the update path. Rules are the alternative: they turn a new
+observation into an agent run without you being there, which spends
+unpredictably. Set `RULES_ENABLED=true` to use them. Copy
 `rules.example.json` to `rules.json`:
 
 ```json
@@ -163,25 +165,52 @@ hash of the token, never the token itself. Put the panel behind HTTPS
 (a reverse proxy is fine) and set `COOKIE_SECURE=true`. `/healthz` stays open
 for health checks.
 
-## The markets panel
+## Branches and the daily brief
 
-The panel leads with a KPI row: one stat tile per symbol showing the level, the
-change against the **prior session's close**, and a sparkline of the last month
-of daily closes. Symbols are Yahoo Finance tickers, so anything that site quotes
-works — indices, FX pairs, futures, crypto.
+Each branch of interest is one cylinder in the engine. Three ship by default —
+**Financial Markets**, **Technology & AI**, **World & Geopolitics** — defined in
+`autonomous/branches.py` and overridable by copying `branches.example.json` to
+`branches.json`:
 
-The panel updates over a server-sent event stream: run steps appear as they
-happen and the market tiles refresh when a watcher polls, with slow polling as
-a fallback if a proxy buffers the stream. The dot beside "live" shows the
-connection.
+```json
+{
+  "slug": "cycling",
+  "name": "Pro Cycling",
+  "tagline": "races, transfers",
+  "feeds": ["https://example.org/cycling.rss"],
+  "symbols": [],
+  "focus": "Race results and team news. Skip rumour."
+}
+```
 
-Direction is shown three ways at once — an arrow, a signed number, and hue — so
-it never depends on color alone. The up/down hues are blue and red rather than
-the conventional green/red: red-green is the one pair that the most common forms
-of color blindness cannot separate. Both hues are validated against the light
-and dark surfaces.
+Add a branch and a cylinder appears. A branch with `symbols` (Yahoo Finance
+tickers) also gets level tiles; one with only `feeds` is headlines alone.
 
-## Layout
+### Why it costs so little
+
+The brief runs on start — the service starts at login — and then once a day. It
+deliberately **does not** use the tool-calling agent loop, which spends three to
+five model calls answering one question because it has to go and fetch things.
+The watchers have already fetched everything, for free, so a brief is a single
+completion per branch with the material handed to it.
+
+Three things hold the cost down, in order of effect:
+
+1. **No tools.** One call per branch, not a loop.
+2. **Nothing new, nothing spent.** A branch whose watcher found nothing since the
+   last brief is skipped entirely — it costs zero calls.
+3. **Batching.** Add more branches than `DAILY_BRIEF_MAX_CALLS` and they are
+   grouped, so the total never exceeds the budget.
+
+Measured on the three default branches: **3 model calls** for the full brief.
+
+### The engine
+
+Cylinders are laid out inline, after the Koenigsegg TFG. A spark plug lights on
+a cylinder that has an update; an idle one is dimmed. It is plain CSS — no
+library, no build step — and it scales to however many branches you configure.
+
+## Layout## Layout
 
 ```
 autonomous/
@@ -193,6 +222,8 @@ autonomous/
 ├── agent/loop.py    # goal -> tool calls -> answer
 ├── watchers/        # the continuously running half + scheduler
 ├── storage/         # SQLite: runs, steps, observations
-├── rules.py         # reactive rules: observation -> agent run
+├── branches.py      # your branches of interest
+├── brief.py         # the daily brief, on a call budget
+├── rules.py         # reactive rules: observation -> agent run (off by default)
 └── web/             # FastAPI app, auth, event stream, panel
 ```

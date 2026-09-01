@@ -134,6 +134,173 @@ h2 {
 .delta.flat { color: var(--flat); }
 .spark { display: block; overflow: visible; }
 
+
+/* --- the engine --------------------------------------------------------
+   One cylinder per branch, in the inline layout of a Koenigsegg TFG. The
+   depth is CSS gradients and transforms - no library, no build step.
+   Hovering raises a piston; the active cylinder stays raised and lit. */
+.engine-board { padding-bottom: .75rem; }
+.board-actions { display: flex; align-items: center; gap: .6rem; }
+
+.engine { padding: 1.6rem .5rem 0; }
+
+.bank {
+  --cyl-h: 126px;
+  position: relative;
+  /* Hug the cylinders so the block bar is the width of the engine, not the board. */
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  display: flex;
+  gap: .5rem;
+  justify-content: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  row-gap: 1.5rem;
+}
+/* The block the bores are bored into. */
+.bank::before {
+  content: "";
+  position: absolute;
+  left: -.4rem; right: -.4rem;
+  top: var(--cyl-h);
+  height: 15px;
+  border-radius: 0 0 10px 10px;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface-0));
+  border: 1px solid var(--line);
+  border-top: 0;
+}
+
+.cylinder {
+  --cyl-w: 108px;
+  --cyl-h: 126px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 var(--cyl-w);
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: center;
+}
+
+/* The bore: a machined tube sunk into the block. */
+.bore {
+  position: relative;
+  width: 100%;
+  height: var(--cyl-h);
+  border-radius: 9px 9px 4px 4px;
+  background: linear-gradient(90deg,
+      color-mix(in srgb, var(--line) 45%, var(--surface-2)) 0%,
+      var(--surface-1) 22%,
+      var(--surface-1) 62%,
+      color-mix(in srgb, var(--line) 55%, var(--surface-2)) 100%);
+  border: 1px solid var(--line);
+  box-shadow: inset 0 3px 8px rgb(0 0 0 / 16%);
+  overflow: hidden;
+}
+/* Honing marks down the bore wall. */
+.bore::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    90deg, transparent 0 6px,
+    color-mix(in srgb, var(--line) 40%, transparent) 6px 7px);
+  opacity: .45;
+}
+
+/* The piston, which rises on hover. */
+.piston {
+  position: absolute;
+  left: 7px;
+  right: 7px;
+  top: 36%;
+  height: 48%;
+  border-radius: 5px 5px 2px 2px;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 20%, var(--surface-1)) 0%,
+    var(--surface-2) 40%,
+    color-mix(in srgb, var(--line) 65%, var(--surface-2)) 100%);
+  border: 1px solid var(--line);
+  box-shadow: 0 -2px 7px rgb(0 0 0 / 14%);
+  transition: transform .22s cubic-bezier(.22,.9,.3,1), box-shadow .22s ease,
+              border-color .22s ease;
+  will-change: transform;
+  z-index: 1;
+}
+/* Piston rings. */
+.piston::before {
+  content: "";
+  position: absolute;
+  inset: 6px 3px auto;
+  height: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  opacity: .75;
+}
+
+.cylinder:hover .piston,
+.cylinder:focus-visible .piston { transform: translateY(-32%); }
+.cylinder[aria-selected="true"] .piston {
+  transform: translateY(-40%);
+  border-color: var(--accent);
+  box-shadow: 0 -3px 12px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.cylinder:focus-visible { outline: none; }
+.cylinder:focus-visible .bore { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Spark: fires only when the branch has an update to read. */
+.spark-plug {
+  position: absolute;
+  left: 50%;
+  top: -13px;
+  width: 3px;
+  height: 13px;
+  transform: translateX(-50%);
+  background: var(--line);
+  border-radius: 2px 2px 0 0;
+}
+.cylinder.fired .spark-plug { background: var(--accent); }
+.cylinder.fired .spark-plug::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -5px;
+  width: 9px;
+  height: 9px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(circle,
+    color-mix(in srgb, var(--accent) 75%, transparent) 0%, transparent 70%);
+}
+
+/* Cleared past the block bar, in normal flow so nothing clips. */
+.cyl-label { margin-top: calc(15px + .5rem); line-height: 1.3; }
+.cyl-label b { display: block; font-weight: 600; color: var(--ink); font-size: .78rem; }
+.cyl-label span { display: block; color: var(--ink-muted); font-size: .68rem; }
+.cylinder[aria-selected="true"] .cyl-label b { color: var(--accent); }
+.cylinder.idle .bore { opacity: .6; }
+
+.engine-hint { text-align: center; margin: 1.1rem 0 0; }
+
+.brief {
+  font-size: .93rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.brief strong { color: var(--ink); }
+.brief .placeholder { color: var(--ink-muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .piston { transition: none; }
+}
+
 /* --- streams ------------------------------------------------------------ */
 .stream { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem;
           max-height: 21rem; overflow-y: auto; }

@@ -13,14 +13,14 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from autonomous.branches import Branch, load_branches
 from autonomous.config import Settings
 from autonomous.errors import describe
 from autonomous.events import EventBus
 from autonomous.storage import Database
 from autonomous.watchers.base import Watcher
+from autonomous.watchers.branch import BranchWatcher
 from autonomous.watchers.email import EmailWatcher
-from autonomous.watchers.feeds import FeedWatcher
-from autonomous.watchers.markets import MarketsWatcher
 
 log = logging.getLogger(__name__)
 
@@ -136,10 +136,15 @@ class Scheduler:
             await asyncio.sleep(delay)
 
 
-def build_scheduler(settings: Settings, db: Database, bus: EventBus | None = None) -> Scheduler:
-    watchers: list[Watcher] = [
-        EmailWatcher(settings),
-        MarketsWatcher(settings),
-        FeedWatcher(settings),
-    ]
+def build_scheduler(
+    settings: Settings,
+    db: Database,
+    bus: EventBus | None = None,
+    branches: list[Branch] | None = None,
+) -> Scheduler:
+    """One watcher per branch of interest, plus the inbox."""
+    if branches is None:
+        branches = load_branches()
+    watchers: list[Watcher] = [BranchWatcher(b, settings) for b in branches]
+    watchers.append(EmailWatcher(settings))
     return Scheduler(settings=settings, db=db, watchers=watchers, bus=bus)

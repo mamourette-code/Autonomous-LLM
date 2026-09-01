@@ -16,7 +16,7 @@ def test_status_lists_tools_and_watchers(client):
     body = client.get("/api/status").json()
     assert body["provider"] == "mock"
     assert "fetch_url" in body["tools"]
-    assert {w["name"] for w in body["watchers"]} == {"email", "markets", "feeds"}
+    assert {w["name"] for w in body["watchers"]} == {"markets", "tech", "world", "email"}
 
 
 def test_index_and_static_assets_are_served(client):
@@ -54,7 +54,6 @@ def test_polling_an_unconfigured_watcher_is_409(client):
 
 def test_markets_endpoint_shapes_quotes_and_headlines(client, settings):
     db = client.app.state.db
-    settings.markets_symbols = ["^GSPC", "^FTSE"]
     db.add_observations(
         [
             {
@@ -80,7 +79,8 @@ def test_markets_endpoint_shapes_quotes_and_headlines(client, settings):
     )
     body = client.get("/api/markets").json()
 
-    # Configured order wins over insertion order.
+    # The markets branch lists ^GSPC before ^FTSE, and that order wins over
+    # whatever order the database returned.
     assert [q["symbol"] for q in body["quotes"]] == ["^GSPC", "^FTSE"]
     assert body["headlines"][0]["title"] == "Stocks rally"
     assert body["headlines"][0]["source"] == "WSJ Markets"
@@ -107,7 +107,8 @@ def test_markets_endpoint_keeps_only_the_latest_level_per_symbol(client):
 
 def test_rules_endpoint_reports_the_budget(client):
     body = client.get("/api/rules").json()
-    assert body["enabled"] is True
+    # Off by default; the daily brief is the update path.
+    assert body["enabled"] is False
     assert body["budget_used"] == 0
     assert body["budget_per_day"] > 0
 
@@ -136,6 +137,7 @@ def test_a_watcher_poll_fires_a_rule_and_starts_a_run(client, settings):
             ]
 
     app = client.app
+    app.state.settings.rules_enabled = True
     app.state.rules.rules = [
         Rule(
             name="Sharp move",

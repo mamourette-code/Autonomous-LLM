@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS observations (
     UNIQUE(source, key)
 );
 CREATE INDEX IF NOT EXISTS observations_created ON observations(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS briefs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    branch     TEXT NOT NULL,
+    brief_date TEXT NOT NULL,              -- YYYY-MM-DD
+    summary    TEXT NOT NULL,
+    sources    INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(branch, brief_date)
+);
 """
 
 
@@ -170,6 +180,38 @@ class Database:
                     inserted.append({**item, "created_at": created_at})
             self._conn.commit()
         return inserted
+
+    # --- briefs ------------------------------------------------------------
+
+    def save_brief(self, branch: str, date: str, summary: str, sources: int = 0) -> None:
+        """Store today's update for a branch, replacing any earlier attempt."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO briefs (branch, brief_date, summary, sources, created_at)"
+                " VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(branch, brief_date) DO UPDATE SET"
+                " summary = excluded.summary, sources = excluded.sources,"
+                " created_at = excluded.created_at",
+                (branch, date, summary, sources, _now()),
+            )
+            self._conn.commit()
+
+    def get_brief(self, branch: str, date: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM briefs WHERE branch = ? AND brief_date = ?", (branch, date)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def latest_briefs(self) -> dict[str, dict[str, Any]]:
+        """The most recent update per branch, whatever day it is from."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT b.* FROM briefs b JOIN ("
+                "  SELECT branch, MAX(brief_date) AS d FROM briefs GROUP BY branch"
+                ") m ON m.branch = b.branch AND m.d = b.brief_date"
+            ).fetchall()
+        return {row["branch"]: dict(row) for row in rows}
 
     def count_runs_since(self, since: str, *, automatic: bool) -> int:
         """How many runs started since an ISO timestamp - used for the daily budget."""

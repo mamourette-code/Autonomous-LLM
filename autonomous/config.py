@@ -10,7 +10,6 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -39,12 +38,21 @@ class Settings(BaseSettings):
     provider_max_retries: int = 2
     provider_retry_max_wait: float = 65.0
 
+    # --- Daily brief -------------------------------------------------------
+    # One update per branch, generated once a day. Each branch costs a single
+    # model call - the watchers have already gathered the material for free -
+    # and a branch with nothing new costs none at all. If you add more branches
+    # than the budget allows, they are batched so the total never exceeds it.
+    daily_brief_enabled: bool = True
+    daily_brief_max_calls: int = 5
+    # Wait this long after start for the first watcher polls to land.
+    daily_brief_startup_delay_seconds: float = 25.0
+
     # --- Reactive rules ----------------------------------------------------
-    # Rules start agent runs on their own when a watcher sees something
-    # matching. This is the only path that spends money unprompted, so it is
-    # capped: when the daily budget is spent, rules stop firing until midnight
-    # UTC. Set rules_enabled=False to stop them entirely.
-    rules_enabled: bool = True
+    # Off: the daily brief is the update path. Rules fire agent runs whenever a
+    # watcher sees something matching, which spends unpredictably. Turn on only
+    # with a rules.json and an eye on the budget.
+    rules_enabled: bool = False
     max_auto_runs_per_day: int = 12
 
     # --- Tools -------------------------------------------------------------
@@ -66,33 +74,8 @@ class Settings(BaseSettings):
     imap_mailbox: str = "INBOX"
     email_poll_seconds: int = 300
 
-    # Financial markets: index/FX/commodity levels and market headlines.
-    # Both are keyless. Empty either list to switch that half off.
-    markets_symbols: list[str] = Field(
-        default_factory=lambda: [
-            "^GSPC",  # S&P 500
-            "^IXIC",  # Nasdaq Composite
-            "^DJI",  # Dow Jones
-            "^FTSE",  # FTSE 100
-            "^STOXX50E",  # Euro Stoxx 50
-            "EURUSD=X",
-            "GC=F",  # Gold
-            "CL=F",  # Crude oil
-            "BTC-USD",
-        ]
-    )
-    markets_feed_urls: list[str] = Field(
-        default_factory=lambda: [
-            "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
-            "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
-            "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines",
-        ]
-    )
-    markets_poll_seconds: int = 3600
-
-    # Any other RSS/Atom URLs you want watched, as a JSON list.
-    feed_urls: list[str] = Field(default_factory=list)
-    feed_poll_seconds: int = 1800
+    # Branches of interest live in branches.json (see branches.example.json),
+    # which also carries their feeds and symbols.
 
     # --- Web UI ------------------------------------------------------------
     # 127.0.0.1 keeps the panel on this machine. Change it only together with

@@ -7,8 +7,9 @@ Guidance for Claude Code (and other AI assistants) working in this repository.
 A self-hosted autonomous assistant, built to be extended over time. Two halves,
 and the split is the central design decision — keep it:
 
-- **Watchers observe, continuously.** They poll a source on an interval and
-  write observations. They never call the model and never act on anything.
+- **Watchers observe, continuously.** One per branch of interest. They poll on
+  an interval and write observations. They never call the model and never act —
+  which is exactly what makes the daily brief cost so little.
 - **Agent runs act, on demand.** The user states a goal in the UI; the agent
   plans, calls tools and iterates until it answers.
 
@@ -40,6 +41,8 @@ it for tests and for any change to the loop itself.
 | `autonomous/providers/` | LLM backends behind one protocol. |
 | `autonomous/tools/` | What an agent run can do. |
 | `autonomous/agent/loop.py` | The tool-calling loop. |
+| `autonomous/branches.py` | Branches of interest; one cylinder each in the panel. |
+| `autonomous/brief.py` | The daily brief and its call budget. |
 | `autonomous/watchers/` | The continuous half, plus the scheduler. |
 | `autonomous/storage/db.py` | SQLite schema and all queries. |
 | `autonomous/web/` | FastAPI app and the single-page UI. |
@@ -78,7 +81,17 @@ depends on:
 2. *Arguments are filtered.* Models invent parameters; `_filter_args` drops any
    the function does not accept.
 
-**Rules.** `rules.py` reacts to observations by starting runs. It is the only
+**Daily brief.** `brief.py` is the default update path and the one place where
+efficiency is the whole design. It must never use the agent loop: that loop
+costs 3-5 calls to answer one question because the model has to fetch things,
+and the watchers have already fetched them. A brief is one *tool-less*
+completion per branch with the material inlined. Three invariants, all tested:
+one call per branch and no loop; a branch with nothing new costs zero calls; and
+more branches than `DAILY_BRIEF_MAX_CALLS` are batched into delimited sections
+so the total never exceeds the budget. Measured: 3 branches, 3 calls.
+
+**Rules.** `rules.py` reacts to observations by starting runs. Off by default —
+the brief replaced it as the update path — but kept and tested. It is the only
 path that spends money unprompted, so its three bounds are load-bearing, not
 decoration — keep every one of them when changing it:
 1. Only rows `add_observations` reports as *new* are evaluated (that method

@@ -13,3 +13,4 @@ data/
 *.sqlite3
 services.json
 rules.json
+branches.json
