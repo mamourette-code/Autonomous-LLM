@@ -13,6 +13,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RectAreaLightUniformsLib } from "three/addons/lights/RectAreaLightUniformsLib.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const BANK_ANGLE = Math.PI / 4; // 45 degrees each side => a 90-degree V
 const CYL_PER_BANK = 4;
@@ -512,11 +513,23 @@ export function createEngine({ container, onSelect, onHover }) {
 
       internals.push({ piston, rod, boreTube, axis, x, side, pin: PIN_ANGLE[i] });
 
+      // A generous invisible box so clicking a branch does not mean hitting a
+      // 20-pixel trumpet. This is the pick target; the visible parts are not.
+      const hitbox = new THREE.Mesh(
+        new THREE.BoxGeometry(CYL_SPACING * 0.98, 2.6, 1.9),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
+      hitbox.position.copy(axis.clone().multiplyScalar(1.95));
+      hitbox.position.x = 0;
+      hitbox.rotation.x = -side * BANK_ANGLE;
+      group.add(hitbox);
+
       cylinders.push({
         index,
         group,
         runner,
         runnerBase: runnerBase.clone(),
+        hitbox,
         meshes: [runnerTube, trumpet],
         trumpet,
         active: false,
@@ -597,11 +610,11 @@ export function createEngine({ container, onSelect, onHover }) {
   let branches = [];
 
   function pickable() {
-    return cylinders.flatMap((c) => c.meshes);
+    return cylinders.filter((c) => c.active).map((c) => c.hitbox);
   }
 
   function cylinderFor(object) {
-    return cylinders.find((c) => c.meshes.includes(object)) || null;
+    return cylinders.find((c) => c.hitbox === object) || null;
   }
 
   function updatePointer(event) {
@@ -703,6 +716,15 @@ export function createEngine({ container, onSelect, onHover }) {
     for (const cylinder of cylinders) {
       const isHovered = cylinder === hovered && cylinder.active;
       const isSelected = cylinder.active && selected === cylinder.index;
+      if (cylinder.fromModel) {
+        const lift = isSelected ? 0.34 : isHovered ? 0.2 : 0;
+        cylinder.marker.position.y +=
+          (cylinder.runnerBase.y + lift - cylinder.marker.position.y) * Math.min(delta * 9, 1);
+        cylinder.marker.rotation.z += delta * (isHovered || isSelected ? 1.6 : 0.35);
+        cylinder.marker.material.emissiveIntensity =
+          isSelected ? 1.1 : isHovered ? 0.8 : 0.4;
+        continue;
+      }
       const target = isSelected ? 0.4 : isHovered ? 0.28 : 0;
       liftTarget
         .copy(cylinder.runnerBase)
@@ -734,10 +756,151 @@ export function createEngine({ container, onSelect, onHover }) {
   resize();
   requestAnimationFrame(frame);
 
+  // --- optional: a real model in place of the procedural one ----------------
+
+  let loadedModel = null;
+  let modelHotspots = [];
+
+  /**
+   * Load a .glb/.gltf and use it instead of the built engine.
+   *
+   * The model is auto-centred and auto-scaled to the same footprint, then
+   * sliced along its longest horizontal axis into one hotspot per branch. That
+   * means *any* engine model works - it does not need named cylinders, and no
+   * geometry has to be edited by hand.
+   */
+  async function loadModel(url, branchCount) {
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(url);
+    const model = gltf.scene;
+
+    // Fit: centre on the origin and scale to a known size.
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const centre = box.getCenter(new THREE.Vector3());
+    const scale = 5.2 / Math.max(size.x, size.y, size.z);
+    model.scale.setScalar(scale);
+    model.position.copy(centre).multiplyScalar(-scale);
+    model.position.y += (size.y / 2) * scale - 1.4;
+
+    model.traverse((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+    });
+
+    // Hide the procedural engine, keep its lights and ground.
+    engine.visible = false;
+    scene.add(model);
+    loadedModel = model;
+
+    buildModelHotspots(model, branchCount);
+    return { meshes: countMeshes(model), triangles: countTriangles(model) };
+  }
+
+  function countMeshes(root) {
+    let n = 0;
+    root.traverse((o) => {
+      if (o.isMesh) n += 1;
+    });
+    return n;
+  }
+
+  function countTriangles(root) {
+    let n = 0;
+    root.traverse((o) => {
+      if (o.isMesh && o.geometry) {
+        const g = o.geometry;
+        n += (g.index ? g.index.count : g.attributes.position.count) / 3;
+      }
+    });
+    return Math.round(n);
+  }
+
+  /** Slice the model into one clickable band per branch. */
+  function buildModelHotspots(model, count) {
+    for (const spot of modelHotspots) scene.remove(spot);
+    modelHotspots = [];
+    if (!count) return;
+
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const centre = box.getCenter(new THREE.Vector3());
+    // Slice along whichever horizontal axis is longer.
+    const alongX = size.x >= size.z;
+    const length = alongX ? size.x : size.z;
+    const step = length / count;
+
+    for (let i = 0; i < count; i += 1) {
+      const offset = -length / 2 + step * (i + 0.5);
+      const hitbox = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          alongX ? step * 0.96 : size.x * 1.05,
+          size.y * 1.05,
+          alongX ? size.z * 1.05 : step * 0.96
+        ),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
+      hitbox.position.set(
+        centre.x + (alongX ? offset : 0),
+        centre.y,
+        centre.z + (alongX ? 0 : offset)
+      );
+      scene.add(hitbox);
+
+      // A visible marker so it is obvious where the branches are.
+      const marker = new THREE.Mesh(
+        new THREE.TorusGeometry(step * 0.2, step * 0.035, 10, 28),
+        new THREE.MeshStandardMaterial({
+          color: COLORS.gold,
+          emissive: new THREE.Color(COLORS.gold),
+          emissiveIntensity: 0.45,
+          metalness: 1,
+          roughness: 0.25,
+        })
+      );
+      marker.rotation.x = -Math.PI / 2;
+      marker.position.set(
+        hitbox.position.x,
+        box.max.y + step * 0.22,
+        hitbox.position.z
+      );
+      scene.add(marker);
+      modelHotspots.push(hitbox, marker);
+
+      cylinders.push({
+        index: i,
+        group: marker,
+        runner: marker,
+        runnerBase: marker.position.clone(),
+        hitbox,
+        meshes: [marker],
+        trumpet: marker,
+        marker,
+        active: true,
+        fromModel: true,
+      });
+    }
+  }
+
   return {
+    loadModel,
+    get usingModel() {
+      return Boolean(loadedModel);
+    },
     /** Map branches onto cylinders; the rest go dark. */
     setBranches(list) {
       branches = list;
+      if (loadedModel) {
+        // Rebuild the bands if the branch count changed.
+        const spots = cylinders.filter((c) => c.fromModel);
+        if (spots.length !== list.length) {
+          for (const spot of spots) cylinders.splice(cylinders.indexOf(spot), 1);
+          buildModelHotspots(loadedModel, list.length);
+        }
+        return;
+      }
       for (const cylinder of cylinders) {
         const branch = list[cylinder.index];
         cylinder.active = Boolean(branch);

@@ -14,3 +14,5 @@ data/
 services.json
 rules.json
 branches.json
+autonomous/web/static/models/*
+!autonomous/web/static/models/README.md

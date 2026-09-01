@@ -221,6 +221,26 @@ Branches map onto cylinders in order; a V8 gives you room for eight. Cylinders
 beyond your branch count sit dark, and a spark plug lights only on a cylinder
 that has an update to read.
 
+### Using a real engine model
+
+The built-in engine is procedural — built from primitives in code. To use a
+proper model instead, drop a **`.glb`** (or `.gltf`) into
+`autonomous/web/static/vendor/../models/` and reload:
+
+```
+autonomous/web/static/models/your-engine.glb
+```
+
+That is the whole procedure. The model is centred, scaled to fit, and sliced
+along its longest horizontal axis into one clickable band per branch, each
+marked with a gold ring — so **any** engine model works without editing its
+geometry or naming its parts.
+
+Buy or export as **glTF/GLB**. `.max`, `.fbx`, `.obj`, `.c4d` and `.blend` do
+not load in a browser; convert first (Blender: File → Export → glTF 2.0). Keep
+it under ~50 MB. Models in that folder are gitignored, so a purchased asset is
+never committed.
+
 Three.js is **vendored** into `autonomous/web/static/vendor/`, loaded through an
 import map. No build step, no CDN, works offline. If WebGL is unavailable the
 stage is removed and a flat, keyboard-reachable cylinder row takes over, so the

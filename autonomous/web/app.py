@@ -221,6 +221,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def observations(limit: int = 100, source: str | None = None) -> list[dict[str, Any]]:
         return db.list_observations(limit=min(limit, 500), source=source)
 
+    @app.get("/api/engine-model")
+    async def engine_model() -> dict[str, Any]:
+        """Report a drop-in engine model, if one has been placed."""
+        models = STATIC_DIR / "models"
+        if models.is_dir():
+            for path in sorted(models.iterdir()):
+                if path.suffix.lower() in (".glb", ".gltf"):
+                    return {
+                        "url": f"/static/models/{path.name}",
+                        "name": path.name,
+                        "bytes": path.stat().st_size,
+                    }
+        return {"url": None}
+
     @app.get("/api/branches")
     async def list_branches() -> dict[str, Any]:
         """Every branch with its latest update - what the engine renders."""

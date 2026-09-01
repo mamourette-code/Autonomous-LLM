@@ -129,6 +129,13 @@ Things that will bite:
   cylinders sit at different heights. Tested via `pistonHeights()`.
 - Every failure path must fall back to the CSS cylinder row rather than leaving
   a dead panel; `createEngine` throwing is expected on a machine without WebGL.
+- **Pick targets are invisible boxes, never the visible geometry.** Aiming at a
+  velocity stack is a 20-pixel target; each cylinder owns a generous hidden box
+  and only those are raycast. Same for a loaded model, which is sliced into one
+  band per branch along its longest horizontal axis - that is what lets any
+  model work without named parts.
+- A `.glb` in `static/models/` replaces the procedural engine. Keep both paths
+  working; `usingModel` says which is live.
 - Addons pull in their own addons: `RectAreaLightUniformsLib` needs
   `RectAreaLightTexturesLib` beside it. Vendor the whole chain, and check the
   browser network tab for a 404 rather than guessing when the stage goes blank.

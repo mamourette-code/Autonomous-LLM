@@ -130,6 +130,7 @@ function startEngine3d() {
     document.body.classList.add("has-engine3d");
     // A handle for the console and the test harness.
     window.autonomousEngine = engine3d;
+    loadEngineModel();
     $("cutaway").addEventListener("change", (event) => {
       engine3d.setCutaway(event.currentTarget.checked);
     });
@@ -175,6 +176,24 @@ function cylinder(branch, index) {
     : `${branch.name} — no update yet`;
   button.onclick = () => selectBranch(branch.slug);
   return button;
+}
+
+/** If a .glb has been dropped into static/models, use it instead. */
+async function loadEngineModel() {
+  try {
+    const info = await api("/api/engine-model");
+    if (!info.url) return;
+    $("engine-hint").textContent = `loading ${info.name}…`;
+    const stats = await engine3d.loadModel(info.url, branches.length || 3);
+    engine3d.setBranches(branches);
+    $("engine-hint").textContent =
+      `${info.name} · ${stats.triangles.toLocaleString()} triangles · drag to rotate, click a ring`;
+    document.getElementById("cutaway").closest("label").hidden = true;
+  } catch (err) {
+    console.warn("engine model failed to load, keeping the built-in engine:", err);
+    $("engine-hint").textContent =
+      "Model failed to load — using the built-in engine. Drag to rotate · click a cylinder";
+  }
 }
 
 async function loadBranches(keepSelection = true) {
