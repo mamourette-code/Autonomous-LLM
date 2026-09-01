@@ -4,7 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Autonomous</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/static/vendor/three.module.min.js",
+    "three/addons/": "/static/vendor/"
+  }
+}
+</script>
 </head>
 <body>
 <header class="topbar">
@@ -31,11 +40,15 @@
     </div>
 
     <div class="engine">
-      <div class="bank" id="engine" role="tablist" aria-label="Branches of interest">
-        <!-- cylinders injected here -->
-      </div>
+      <div class="stage" id="engine-stage" aria-hidden="true"></div>
+      <!-- Keyboard-reachable equivalent of the cylinders, and the fallback
+           when WebGL is unavailable. -->
+      <div class="bank" id="engine" role="tablist" aria-label="Branches of interest"></div>
     </div>
-    <p class="hint engine-hint">Hover a cylinder to raise it · click to read that branch</p>
+    <div class="engine-bar">
+      <p class="hint engine-hint" id="engine-hint">Drag to rotate · hover a cylinder · click to read that branch</p>
+      <label class="toggle"><input type="checkbox" id="cutaway"> cutaway</label>
+    </div>
   </section>
 
   <section class="board" id="branch-board" aria-labelledby="branch-heading" hidden>
@@ -67,6 +80,6 @@
 
 </main>
 
-<script src="/static/app.js"></script>
+<script type="module" src="/static/app.js"></script>
 </body>
 </html>

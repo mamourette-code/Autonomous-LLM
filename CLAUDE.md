@@ -116,8 +116,22 @@ cookie cannot be replayed as a bearer credential. Compare secrets only with
 `compare_digest`. Any new public path must be added to `auth.PUBLIC_PATHS`
 deliberately — think about what it exposes first.
 
-**Panel.** `web/static/` is plain HTML/CSS/JS, no build step and no framework —
-keep it that way. `/api/markets` does the shaping (latest level per symbol, in
+**Engine (`web/static/engine3d.js`).** A procedural twin-turbo V8 in three.js.
+Things that will bite:
+- three.js is *vendored* under `static/vendor/` and resolved by an import map;
+  `three/addons/` maps to `vendor/`, so addon files must keep their upstream
+  subpath (`vendor/controls/OrbitControls.js`). No CDN, no build step — keep it
+  that way so the panel works offline.
+- `renderer.setSize(w, h)` must keep `updateStyle` on. With it off, the canvas
+  lays out at its device-pixel size and overflows the container.
+- The frame loop must not allocate: vectors are preallocated at construction.
+- Piston motion is real slider-crank on a cross-plane firing order, so the
+  cylinders sit at different heights. Tested via `pistonHeights()`.
+- Every failure path must fall back to the CSS cylinder row rather than leaving
+  a dead panel; `createEngine` throwing is expected on a machine without WebGL.
+
+**Panel.** The rest of `web/static/` is plain HTML/CSS/JS, no build step and no
+framework — keep it that way. `/api/markets` does the shaping (latest level per symbol, in
 configured order, plus headlines) so the front end just renders. Color roles are
 CSS custom properties defined for light, OS-dark and an explicit `data-theme`
 stamp; add new colors as roles, never as raw hex in a rule. Direction is encoded

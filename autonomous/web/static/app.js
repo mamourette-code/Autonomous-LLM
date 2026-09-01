@@ -1,3 +1,5 @@
+import { createEngine } from "./engine3d.js";
+
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -108,6 +110,36 @@ function quoteTile(quote) {
 
 let branches = [];
 let activeBranch = null;
+let engine3d = null;
+
+/** Start the WebGL engine. If it cannot run, the CSS cylinders stay visible. */
+function startEngine3d() {
+  const stage = document.getElementById("engine-stage");
+  try {
+    engine3d = createEngine({
+      container: stage,
+      onSelect: (slug) => selectBranch(slug),
+      onHover: (slug) => {
+        const hint = $("engine-hint");
+        const branch = branches.find((b) => b.slug === slug);
+        hint.textContent = branch
+          ? `${branch.name} — ${branch.brief ? "click to read today's update" : "no update yet"}`
+          : "Drag to rotate · hover a cylinder · click to read that branch";
+      },
+    });
+    document.body.classList.add("has-engine3d");
+    // A handle for the console and the test harness.
+    window.autonomousEngine = engine3d;
+    $("cutaway").addEventListener("change", (event) => {
+      engine3d.setCutaway(event.currentTarget.checked);
+    });
+  } catch (err) {
+    // No WebGL, or the vendored library is missing: fall back to the CSS bank.
+    console.warn("3D engine unavailable, using the flat cylinders:", err);
+    stage.remove();
+    document.querySelector(".engine-bar").hidden = true;
+  }
+}
 
 /** Very small markdown subset: bold, bullets, line breaks. Text is escaped first. */
 function renderBrief(text) {
@@ -156,6 +188,10 @@ async function loadBranches(keepSelection = true) {
     const engine = $("engine");
     engine.innerHTML = "";
     branches.forEach((branch, i) => engine.appendChild(cylinder(branch, i)));
+    if (engine3d) {
+      engine3d.setBranches(branches);
+      engine3d.setSelected(activeBranch);
+    }
 
     const withBrief = branches.filter((b) => b.brief);
     $("brief-meta").textContent = withBrief.length
@@ -173,11 +209,13 @@ function selectBranch(slug) {
   for (const button of document.querySelectorAll(".cylinder")) {
     button.setAttribute("aria-selected", String(button.dataset.slug === activeBranch));
   }
+  if (engine3d) engine3d.setSelected(activeBranch);
   if (!activeBranch) {
     $("branch-board").hidden = true;
     return;
   }
   renderBranch(activeBranch);
+  $("branch-board").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 async function renderBranch(slug) {
@@ -365,6 +403,7 @@ $("refresh-brief").addEventListener("click", async (event) => {
   button.disabled = true;
   button.textContent = "Working…";
   $("brief-meta").textContent = "generating…";
+  if (engine3d) engine3d.setRevs(6.5);
   try {
     const result = await api("/api/brief/run", { method: "POST" });
     await loadBranches();
@@ -373,6 +412,7 @@ $("refresh-brief").addEventListener("click", async (event) => {
   } catch (err) {
     $("brief-meta").textContent = `could not generate: ${err.message}`;
   } finally {
+    if (engine3d) engine3d.setRevs(1.9);
     button.disabled = false;
     button.textContent = "Regenerate";
   }
@@ -426,6 +466,7 @@ function connectStream() {
   stream.addEventListener("watcher.failed", loadStatus);
 }
 
+startEngine3d();
 loadStatus();
 loadBranches();
 loadRuns();

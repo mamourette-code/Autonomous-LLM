@@ -206,9 +206,28 @@ Measured on the three default branches: **3 model calls** for the full brief.
 
 ### The engine
 
-Cylinders are laid out inline, after the Koenigsegg TFG. A spark plug lights on
-a cylinder that has an update; an idle one is dimmed. It is plain CSS — no
-library, no build step — and it scales to however many branches you configure.
+The panel leads with a **twin-turbo V8 in WebGL**, modelled on the Koenigsegg:
+90-degree banks, the gold intake plenum down the valley, velocity stacks,
+turbos outboard.
+
+- **Drag to orbit**, wheel to zoom.
+- **Hover a cylinder** and its runner lifts; **click** it to open that branch.
+- **Cutaway** makes the bank castings translucent and shows the internals: the
+  crankshaft, eight pistons and their rods, driven by real slider-crank motion
+  on a cross-plane firing order — not a canned loop.
+- The engine idles, and revs while a brief is generating.
+
+Branches map onto cylinders in order; a V8 gives you room for eight. Cylinders
+beyond your branch count sit dark, and a spark plug lights only on a cylinder
+that has an update to read.
+
+Three.js is **vendored** into `autonomous/web/static/vendor/`, loaded through an
+import map. No build step, no CDN, works offline. If WebGL is unavailable the
+stage is removed and a flat, keyboard-reachable cylinder row takes over, so the
+panel keeps working.
+
+`window.autonomousEngine` is a debug handle in the browser console:
+`setRevs(7)`, `setCutaway(true)`, `pistonHeights()`, `frameCount`.
 
 ## Layout## Layout
 

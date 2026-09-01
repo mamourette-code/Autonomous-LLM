@@ -142,7 +142,42 @@ h2 {
 .engine-board { padding-bottom: .75rem; }
 .board-actions { display: flex; align-items: center; gap: .6rem; }
 
-.engine { padding: 1.6rem .5rem 0; }
+.engine { padding: 1.6rem .5rem 0; position: relative; }
+
+/* The WebGL stage. Dark, because the engine is lit like a studio shot. */
+.stage {
+  width: 100%;
+  height: clamp(360px, 52vh, 560px);
+  border-radius: 10px;
+  background:
+    radial-gradient(120% 90% at 50% 15%, #23262b 0%, #131518 55%, #0a0b0d 100%);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  cursor: grab;
+}
+.stage:active { cursor: grabbing; }
+
+/* With the 3D engine running, the CSS cylinders become a compact,
+   keyboard-reachable row beneath it rather than the main event. */
+.has-engine3d .bank { --cyl-h: 34px; margin-top: 1rem; }
+.has-engine3d .bank::before { display: none; }
+.has-engine3d .cylinder { --cyl-w: 132px; }
+.has-engine3d .piston { display: none; }
+.has-engine3d .spark-plug { top: -9px; height: 9px; }
+.has-engine3d .cyl-label { margin-top: .45rem; }
+.has-engine3d .bore { border-radius: 6px; }
+
+.engine-bar {
+  display: flex; align-items: center; justify-content: center;
+  gap: 1rem; flex-wrap: wrap; margin-top: .9rem;
+}
+.engine-hint { margin: 0; }
+.toggle {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .74rem; color: var(--ink-muted); cursor: pointer;
+  user-select: none;
+}
+.toggle input { accent-color: var(--accent); margin: 0; }
 
 .bank {
   --cyl-h: 126px;
