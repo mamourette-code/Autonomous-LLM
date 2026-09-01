@@ -12,11 +12,18 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass(slots=True)
 class ToolCall:
-    """A model's request to invoke one tool."""
+    """A model's request to invoke one tool.
+
+    ``provider_state`` is opaque data the provider needs echoed back verbatim
+    when the call is replayed in the conversation. Nothing outside the provider
+    should read it. Gemini 3.x uses it for the thought signature, which the API
+    rejects a follow-up turn without.
+    """
 
     name: str
     args: dict[str, Any]
     id: str | None = None
+    provider_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

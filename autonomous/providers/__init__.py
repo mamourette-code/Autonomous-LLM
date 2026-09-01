@@ -25,7 +25,12 @@ def build_provider(settings: Settings, name: str | None = None) -> LLMProvider:
     if provider == "gemini":
         from autonomous.providers.gemini import GeminiProvider
 
-        return GeminiProvider(settings.gemini_api_key, settings.gemini_model)
+        return GeminiProvider(
+            settings.gemini_api_key,
+            settings.gemini_model,
+            max_retries=settings.provider_max_retries,
+            retry_max_wait=settings.provider_retry_max_wait,
+        )
     if provider == "mock":
         return MockProvider()
     raise ProviderError(f"unknown provider {provider!r}; available: {', '.join(AVAILABLE)}")

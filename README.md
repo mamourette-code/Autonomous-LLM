@@ -29,6 +29,21 @@ autonomous serve            # http://127.0.0.1:8000
 
 Get a Gemini API key from https://aistudio.google.com/apikey.
 
+**Model:** the default is `gemini-3.6-flash`. Google retires older models to new
+users, so if you get a 404 saying the model is unavailable, list what your key
+can actually reach and set `GEMINI_MODEL`:
+
+```bash
+.venv/bin/python -c "from google import genai; import os; \
+  [print(m.name) for m in genai.Client(api_key=os.environ['GEMINI_API_KEY']).models.list()]"
+```
+
+**Free-tier rate limits are tight.** One task run makes several model calls, and
+the free tier allows about five requests per minute per model. The provider
+retries on 429 and 503, honouring the delay the API asks for, so runs get
+slower rather than failing — but keep `MAX_AUTO_RUNS_PER_DAY` modest, or move to
+a paid tier before leaning on rules.
+
 Without a key the app still starts: watchers run, and `PROVIDER=mock` lets you
 exercise the agent loop offline.
 

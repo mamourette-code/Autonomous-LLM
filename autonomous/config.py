@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # provider is the default used for agent runs; each provider needs its key.
     provider: str = "gemini"
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.6-flash"
 
     # --- Storage -----------------------------------------------------------
     data_dir: Path = REPO_ROOT / "data"
@@ -32,7 +32,12 @@ class Settings(BaseSettings):
     # Hard ceiling on tool-calling iterations, so a confused run cannot spin
     # forever or burn tokens unattended.
     max_steps: int = 12
-    step_timeout_seconds: float = 120.0
+    # Generous, because a step may wait out a rate limit before it even starts.
+    step_timeout_seconds: float = 300.0
+    # Free Gemini tiers cap requests per minute, and a busy model returns 503.
+    # Both are retried, honouring the delay the API asks for.
+    provider_max_retries: int = 2
+    provider_retry_max_wait: float = 65.0
 
     # --- Reactive rules ----------------------------------------------------
     # Rules start agent runs on their own when a watcher sees something

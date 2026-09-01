@@ -76,3 +76,14 @@ async def test_empty_exception_messages_still_name_the_failure():
         [Tool(name="t", description="", parameters={"type": "object"}, fn=timeout)]
     )
     assert await registry.call("t", {}) == "Error calling t: ConnectTimeout"
+
+
+async def test_empty_observations_tell_the_model_what_to_do_next(settings, db):
+    """A vague empty result makes the model retry the same tool, wasting a call."""
+    from autonomous.tools import build_registry
+
+    registry = build_registry(settings, db)
+    result = await registry.call("recent_observations", {})
+
+    assert "Do not call this tool again" in result
+    assert "fetch_url" in result

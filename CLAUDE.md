@@ -47,7 +47,17 @@ it for tests and for any change to the loop itself.
 
 ## Architecture
 
-**Providers.** `autonomous/providers/base.py` defines `Message`, `ToolSpec`,
+**Providers.** Two Gemini-specific traps, both found by running it and both
+now covered by tests:
+- *Thought signatures.* Gemini 3.x returns a `thought_signature` on each
+  function-call part and rejects the next turn with 400 if it is not echoed
+  back. `ToolCall.provider_state` carries it; read calls off `response.candidates`
+  parts, never `response.function_calls`, which drops it.
+- *Rate limits.* Free tiers cap requests per minute and busy models return 503.
+  `complete()` retries both, honouring the API's own `retryDelay`. Non-retryable
+  statuses (400, 404) must keep failing fast.
+
+`autonomous/providers/base.py` defines `Message`, `ToolSpec`,
 `ToolCall`, `LLMResponse` and the `LLMProvider` protocol. The agent loop sees
 only those. Adding a backend = one new module implementing `complete()` plus a
 branch in `build_provider`; nothing else changes. Gemini is the default

@@ -16,7 +16,14 @@ def _build_memory_tools(db: Database) -> list[Tool]:
     async def recent_observations(source: str | None = None, limit: int = 20) -> str:
         items = db.list_observations(limit=min(int(limit), 100), source=source)
         if not items:
-            return "No observations recorded yet."
+            # Be explicit about what to do next: a vague empty result makes the
+            # model retry with different arguments, and on a rate-limited free
+            # tier every wasted call costs a minute.
+            return (
+                "No observations recorded yet - the watchers have collected nothing "
+                "for this source. Do not call this tool again for this task; use "
+                "fetch_url or read_feed to get the information from the web instead."
+            )
         return "\n".join(
             f"[{item['created_at']}] ({item['source']}) {item['title']}"
             f"{' - ' + item['url'] if item['url'] else ''}"
