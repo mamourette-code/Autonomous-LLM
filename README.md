@@ -94,6 +94,31 @@ Then set `BROWSER_ENABLED=true`. Acting on pages (`browser_interact`) additional
 needs `BROWSER_ACTIONS_ENABLED=true`; it is off by default because it operates on
 real sites under your identity.
 
+## Reaching it from a phone or tablet
+
+**This is a Python server. It cannot run *on* an iPad or iPhone** — iOS has no
+general-purpose Python runtime. It has to run on a Mac, PC or Linux box, and
+the tablet then opens it in a browser.
+
+On the machine that runs it:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(24))"   # generate a token
+echo 'AUTH_TOKEN=<paste it>' >> .env
+autonomous serve --lan
+```
+
+It prints the address to type into the tablet, e.g. `http://192.168.1.42:8000`.
+Sign in with that token. Both devices must be on the same network.
+
+`--lan` refuses to start without `AUTH_TOKEN`, because binding to the network
+without one would let anyone on it read your watchers and spend your API
+credits.
+
+The panel itself works fine on a tablet: WebGL renders, and tapping a cylinder
+opens its branch. If you have no computer to run it on at all, the panel needs
+to live on a small VPS instead — see *Exposing the panel*.
+
 ## Running it all the time
 
 `deploy/install.sh` installs the panel as a background service that starts when

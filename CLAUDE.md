@@ -27,6 +27,7 @@ pytest                           # full suite
 pytest tests/test_agent.py -k budget   # a single test
 ruff check . && ruff format .    # lint, then format
 ./deploy/install.sh              # install as a login service (systemd/launchd)
+autonomous serve --lan           # reachable from a phone/tablet; needs AUTH_TOKEN
 ```
 
 `PROVIDER=mock` runs the whole agent loop with no API key and no network — use

@@ -14,6 +14,22 @@ from autonomous.storage import Database
 from autonomous.tools import build_registry
 
 
+def lan_address() -> str:
+    """This machine's address on the local network.
+
+    Opening a UDP socket to an outside address makes the OS pick the interface
+    it would actually route through; nothing is sent.
+    """
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect(("192.0.2.1", 9))  # TEST-NET-1, never routed
+            return probe.getsockname()[0]
+        except OSError:
+            return socket.gethostbyname(socket.gethostname())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="autonomous", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -23,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
     serve.add_argument("--reload", action="store_true")
+    serve.add_argument(
+        "--lan",
+        action="store_true",
+        help="serve to your whole network so a phone or tablet can reach it; "
+        "requires AUTH_TOKEN and prints the address to open",
+    )
 
     run = sub.add_parser("run", help="run one goal from the terminal")
     run.add_argument("goal", nargs="+")
@@ -41,11 +63,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         import uvicorn
 
+        host = args.host or settings.host
+        port = args.port or settings.port
+
+        if args.lan:
+            if not settings.auth_token:
+                print(
+                    "error: --lan needs an AUTH_TOKEN, or anyone on your network could "
+                    "read your watchers and spend your API credits.\n"
+                    '  Generate one:  python -c "import secrets; '
+                    'print(secrets.token_urlsafe(24))"\n'
+                    "  Then add it to .env as AUTH_TOKEN=...",
+                    file=sys.stderr,
+                )
+                return 2
+            host = "0.0.0.0"  # noqa: S104 - deliberate, and gated on a token
+            address = lan_address()
+            print("\n  Open this on your phone, tablet or another computer:\n")
+            print(f"      http://{address}:{port}\n")
+            print("  Sign in with the token from your .env file.")
+            print("  Both devices must be on the same network.\n")
+
         uvicorn.run(
             "autonomous.web.app:app",
             factory=True,
-            host=args.host or settings.host,
-            port=args.port or settings.port,
+            host=host,
+            port=port,
             reload=args.reload,
         )
         return 0
