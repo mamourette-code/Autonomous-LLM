@@ -11,8 +11,10 @@ from __future__ import annotations
 import os
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 
 SCHEMA_VERSION = 1
 
@@ -167,12 +169,62 @@ _MIGRATIONS: list[tuple[int, str]] = [
 ]
 
 
+def _statements(script: str) -> Iterator[str]:
+    """Split a SQL script into complete statements.
+
+    Uses sqlite3.complete_statement rather than a naive split on ";" so a
+    semicolon inside a string literal cannot cut a statement in half.
+    """
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            statement = buffer.strip()
+            if statement:
+                yield statement
+            buffer = ""
+    tail = buffer.strip()
+    if tail:
+        yield tail
+
+
 class Store:
     """A thin wrapper over a SQLite connection with schema management."""
 
     def __init__(self, conn: sqlite3.Connection, path: str) -> None:
         self.conn = conn
         self.path = path
+        self._depth = 0
+
+    # -- transactions ------------------------------------------------------
+    @contextmanager
+    def transaction(self) -> Iterator["Store"]:
+        """All-or-nothing boundary for a multi-statement operation.
+
+        Without this, a write that fails partway leaves rows behind that the
+        next unrelated commit silently makes permanent - which is how a task
+        can end up in the database with no audit event, the exact condition
+        the observability health check exists to detect.
+
+        Reentrant: an inner block joins the outer transaction rather than
+        committing early, so `record an event` nested inside `change state`
+        cannot commit half of the pair.
+        """
+        self._depth += 1
+        try:
+            yield self
+        except BaseException:
+            self._depth -= 1
+            if self._depth == 0:
+                self.conn.rollback()
+            raise
+        self._depth -= 1
+        if self._depth == 0:
+            self.conn.commit()
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._depth > 0
 
     # -- lifecycle ---------------------------------------------------------
     def close(self) -> None:
@@ -189,14 +241,30 @@ class Store:
         return int(self.conn.execute("PRAGMA user_version").fetchone()[0])
 
     def migrate(self) -> int:
-        """Apply outstanding migrations. Returns the resulting version."""
-        current = self.schema_version()
-        for version, sql in _MIGRATIONS:
-            if version > current:
-                self.conn.executescript(sql)
-                self.conn.execute(f"PRAGMA user_version = {version}")
-                self.conn.commit()
-                current = version
+        """Apply outstanding migrations. Returns the resulting version.
+
+        Serialised with BEGIN IMMEDIATE: two processes opening a fresh database
+        at the same time would otherwise both read version 0 and both run the
+        schema script, and the loser died with "table already exists" - taking
+        every write it had queued with it.
+
+        Statements are executed one at a time rather than with executescript(),
+        because executescript() issues an implicit COMMIT that would drop the
+        very lock this relies on.
+        """
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            current = self.schema_version()
+            for version, sql in _MIGRATIONS:
+                if version > current:
+                    for statement in _statements(sql):
+                        self.conn.execute(statement)
+                    self.conn.execute(f"PRAGMA user_version = {version}")
+                    current = version
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
         return current
 
     # -- convenience -------------------------------------------------------
@@ -210,7 +278,9 @@ class Store:
         return self.conn.execute(sql, params).fetchone()
 
     def commit(self) -> None:
-        self.conn.commit()
+        """Commit, unless a transaction block is in charge of that decision."""
+        if self._depth == 0:
+            self.conn.commit()
 
 
 def open_store(path: str | os.PathLike | None = None) -> Store:
@@ -229,6 +299,7 @@ def open_store(path: str | os.PathLike | None = None) -> Store:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL" if path != ":memory:" else "PRAGMA journal_mode = MEMORY")
+    conn.execute("PRAGMA busy_timeout = 5000")
     store = Store(conn, path)
     store.migrate()
     return store

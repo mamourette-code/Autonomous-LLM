@@ -43,6 +43,10 @@ STORE = "store"
 SKIP = "skip"
 REFER_TO_USER = "refer_to_user"
 
+
+class SensitiveContentError(ValueError):
+    """Raised when a write would persist content the sensitivity scan flagged."""
+
 # Half-life in days used to derive a review date from the decay score.
 _MAX_REVIEW_DAYS = 730
 
@@ -325,12 +329,18 @@ def remember(
     decay: float = 0.3,
     review_after: str | None = None,
     assessment: Assessment | None = None,
+    allow_sensitive: bool = False,
     session_id: str | None = None,
 ) -> Memory:
     """Write a memory. Callers should normally assess() first.
 
     `assessment`, when supplied, is recorded with the write so the reason a
     memory exists stays inspectable.
+
+    The sensitivity scan runs here too, not only in assess(). Governance that
+    the primary write path can skip is not governance: without this, a caller
+    that never assessed could persist a credential to disk unremarked. Passing
+    `allow_sensitive=True` is the deliberate override and is recorded as one.
     """
     _validate_kind(kind)
     if source_class not in SOURCE_CLASSES:
@@ -341,6 +351,25 @@ def remember(
         raise ValueError("sourced_knowledge requires an identifiable source (protocol s12)")
     if not title.strip() or not body.strip():
         raise ValueError("a memory needs both a title and a body")
+
+    sens, sens_hits = sensitivity(f"{title}\n{body}")
+    if sens > 0 and not allow_sensitive:
+        events.record(
+            store,
+            "memory.write",
+            actor,
+            outcome="denied",
+            permission="create",
+            session_id=session_id,
+            memory_kind=kind,
+            reason="sensitivity scan flagged this content",
+            flags=sens_hits,
+        )
+        raise SensitiveContentError(
+            "refusing to store possibly sensitive content ("
+            + ", ".join(sens_hits)
+            + "); retention is the user's decision - pass allow_sensitive=True to override"
+        )
 
     now = utcnow()
     if review_after is None:
@@ -361,42 +390,43 @@ def remember(
         created_at=now,
         updated_at=now,
     )
-    store.execute(
-        """INSERT INTO memories (id, kind, title, body, payload, source, source_class,
-           confidence, project, entities, tags, review_after, superseded_by, archived,
-           access_count, last_used_at, created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,NULL,?,?)""",
-        (
-            mem.id,
-            mem.kind,
-            mem.title,
-            mem.body,
-            json.dumps(mem.payload, default=str),
-            mem.source,
-            mem.source_class,
-            mem.confidence,
-            mem.project,
-            json.dumps(mem.entities),
-            json.dumps(mem.tags),
-            mem.review_after,
-            mem.created_at,
-            mem.updated_at,
-        ),
-    )
-    store.commit()
-    events.record(
-        store,
-        "memory.write",
-        actor,
-        target=mem.id,
-        permission="create",
-        session_id=session_id,
-        memory_kind=kind,
-        source_class=source_class,
-        confidence=confidence,
-        expected_value=assessment.expected_value if assessment else None,
-        reasons=assessment.reasons if assessment else None,
-    )
+    with store.transaction():
+        store.execute(
+            """INSERT INTO memories (id, kind, title, body, payload, source, source_class,
+               confidence, project, entities, tags, review_after, superseded_by, archived,
+               access_count, last_used_at, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,NULL,?,?)""",
+            (
+                mem.id,
+                mem.kind,
+                mem.title,
+                mem.body,
+                json.dumps(mem.payload, default=str),
+                mem.source,
+                mem.source_class,
+                mem.confidence,
+                mem.project,
+                json.dumps(mem.entities),
+                json.dumps(mem.tags),
+                mem.review_after,
+                mem.created_at,
+                mem.updated_at,
+            ),
+        )
+        events.record(
+            store,
+            "memory.write",
+            actor,
+            target=mem.id,
+            permission="create",
+            session_id=session_id,
+            memory_kind=kind,
+            source_class=source_class,
+            confidence=confidence,
+            sensitive_override=bool(sens > 0 and allow_sensitive),
+            expected_value=assessment.expected_value if assessment else None,
+            reasons=assessment.reasons if assessment else None,
+        )
     return mem
 
 
@@ -417,20 +447,20 @@ def supersede(
         raise KeyError(f"no such memory: {old_id}")
     if get(store, new_id_) is None:
         raise KeyError(f"no such memory: {new_id_}")
-    store.execute(
-        "UPDATE memories SET superseded_by = ?, archived = 1, updated_at = ? WHERE id = ?",
-        (new_id_, utcnow(), old_id),
-    )
-    store.commit()
-    events.record(
-        store,
-        "memory.supersede",
-        actor,
-        target=old_id,
-        permission="modify",
-        replacement=new_id_,
-        note=note,
-    )
+    with store.transaction():
+        store.execute(
+            "UPDATE memories SET superseded_by = ?, archived = 1, updated_at = ? WHERE id = ?",
+            (new_id_, utcnow(), old_id),
+        )
+        events.record(
+            store,
+            "memory.supersede",
+            actor,
+            target=old_id,
+            permission="modify",
+            replacement=new_id_,
+            note=note,
+        )
 
 
 def touch(store: Store, memory_id: str) -> None:

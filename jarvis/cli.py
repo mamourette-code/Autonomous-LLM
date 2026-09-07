@@ -25,17 +25,30 @@ from jarvis.store import open_store
 
 _STATUS_MARK = {"ok": "ok  ", "warn": "warn", "fail": "FAIL"}
 
+# Applied after parsing, because these flags must keep argparse's SUPPRESS
+# default to survive being given before the subcommand (see _build_parser).
+_GLOBAL_DEFAULTS = {"db": None, "json": False, "actor": "claude", "session": None}
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    for name, fallback in _GLOBAL_DEFAULTS.items():
+        if not hasattr(args, name):
+            setattr(args, name, fallback)
     if not getattr(args, "func", None):
         parser.print_help()
         return 1
     with open_store(args.db) as store:
         try:
             result = args.func(store, args)
-        except (ValueError, KeyError, RuntimeError, task_mod.TransitionError) as exc:
+        except (
+            ValueError,
+            KeyError,
+            RuntimeError,
+            task_mod.TransitionError,
+            obj_mod.AuthorityError,
+        ) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
     if args.json:
@@ -396,7 +409,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="jarvis", description="JARVIS foundation layer", parents=[common]
     )
-    p.set_defaults(db=None, json=False, actor="claude", session=None, func=None)
+    # Only `func` may use set_defaults here. argparse's set_defaults rewrites
+    # the default of any *matching action*, and parents=[] shares the very same
+    # action objects with every subparser - so set_defaults(db=None) silently
+    # turned the SUPPRESS default into None, and the subparser then wrote that
+    # None back over a --db given before the subcommand. Defaults for the
+    # global flags are applied after parsing instead, in main().
+    p.set_defaults(func=None)
     sub = p.add_subparsers(dest="command")
 
     def add(name: str, help_: str) -> argparse.ArgumentParser:

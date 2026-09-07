@@ -52,9 +52,17 @@ persisted as unresolved, both sides kept, confidence reduced. Nothing is
 silently merged.
 
 **Observability and self-diagnosis (s35/s43/s44/s45/s57).** Every mutation is
-audited. Metrics are derived from the log at read time, so they cannot drift.
-An unmeasured rate reports `n/a`, never `0%`. `doctor` reports health, metrics,
+audited, and a state change commits together with its audit event or not at
+all. Metrics are derived from the log at read time, so they cannot drift. An
+unmeasured rate reports `n/a`, never `0%`. `doctor` reports health, metrics,
 open work — and the capabilities this system does **not** have.
+
+**Authority (s34/s64).** Permission categories and authorizations are recorded.
+One boundary is *enforced*: only an objective's authority may declare it
+achieved or abandoned, and a refused attempt is recorded as `denied`.
+Attribution is truthful — `authorized_by` names a real authorization by the
+acting party, and `actor` must be stated explicitly rather than defaulting to
+the user. Everything else is audited, not gated, and `doctor` says so.
 
 ## What it deliberately does not do
 
@@ -68,8 +76,11 @@ now actually measure.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v   # 122 tests
 ```
+
+`tests/test_audit_regressions.py` holds the regressions from the Task 1
+acceptance audit — each one reproduces a defect the original suite passed over.
 
 ## Documentation
 

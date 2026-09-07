@@ -119,40 +119,42 @@ def create(
         updated_at=now,
         depends_on=list(depends_on or []),
     )
-    store.execute(
-        """INSERT INTO tasks (id, objective_id, title, status, priority, parent_id,
-           assignee, expected, actual, failure_class, failure_note, project,
-           created_at, updated_at, started_at, completed_at, verified_at)
-           VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,?,NULL,NULL,NULL)""",
-        (
-            task.id,
-            task.objective_id,
-            task.title,
-            task.status,
-            task.priority,
-            task.parent_id,
-            task.assignee,
-            task.expected,
-            task.project,
-            task.created_at,
-            task.updated_at,
-        ),
-    )
-    for dep in task.depends_on:
+    # The row, its dependencies and its audit event commit together or not at
+    # all. Previously a bad dependency left an orphan task with no event.
+    with store.transaction():
         store.execute(
-            "INSERT INTO task_deps (task_id, depends_on) VALUES (?,?)", (task.id, dep)
+            """INSERT INTO tasks (id, objective_id, title, status, priority, parent_id,
+               assignee, expected, actual, failure_class, failure_note, project,
+               created_at, updated_at, started_at, completed_at, verified_at)
+               VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,?,NULL,NULL,NULL)""",
+            (
+                task.id,
+                task.objective_id,
+                task.title,
+                task.status,
+                task.priority,
+                task.parent_id,
+                task.assignee,
+                task.expected,
+                task.project,
+                task.created_at,
+                task.updated_at,
+            ),
         )
-    store.commit()
-    events.record(
-        store,
-        "task.create",
-        actor,
-        target=task.id,
-        permission="create",
-        session_id=session_id,
-        title=title,
-        objective_id=objective_id,
-    )
+        for dep in task.depends_on:
+            store.execute(
+                "INSERT INTO task_deps (task_id, depends_on) VALUES (?,?)", (task.id, dep)
+            )
+        events.record(
+            store,
+            "task.create",
+            actor,
+            target=task.id,
+            permission="create",
+            session_id=session_id,
+            title=title,
+            objective_id=objective_id,
+        )
     return task
 
 
@@ -245,18 +247,19 @@ def transition(
     if status == FAILED:
         task.failure_class = failure_class
         task.failure_note = note
-    _save(store, task)
-    events.record(
-        store,
-        "task.transition",
-        actor,
-        target=task_id,
-        permission="modify",
-        session_id=session_id,
-        note=note,
-        failure_class=failure_class,
-        **{"from": previous, "to": status},
-    )
+    with store.transaction():
+        _save(store, task)
+        events.record(
+            store,
+            "task.transition",
+            actor,
+            target=task_id,
+            permission="modify",
+            session_id=session_id,
+            note=note,
+            failure_class=failure_class,
+            **{"from": previous, "to": status},
+        )
     return task
 
 
@@ -286,35 +289,36 @@ def verify(
 
     completer = _completer(store, task_id)
     independent = bool(completer and verifier != completer)
-    store.execute(
-        """INSERT INTO verifications
-           (id, task_id, method, evidence, verifier, completer, independent, passed, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (
-            new_id("ver"),
-            task_id,
-            method,
-            evidence,
+    with store.transaction():
+        store.execute(
+            """INSERT INTO verifications
+               (id, task_id, method, evidence, verifier, completer, independent, passed, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                new_id("ver"),
+                task_id,
+                method,
+                evidence,
+                verifier,
+                completer,
+                int(independent),
+                int(passed),
+                utcnow(),
+            ),
+        )
+        events.record(
+            store,
+            "task.verify",
             verifier,
-            completer,
-            int(independent),
-            int(passed),
-            utcnow(),
-        ),
-    )
-    store.commit()
-    events.record(
-        store,
-        "task.verify",
-        verifier,
-        target=task_id,
-        outcome="ok" if passed else "failed",
-        permission="modify",
-        session_id=session_id,
-        method=method,
-        independent=independent,
-        passed=passed,
-    )
+            target=task_id,
+            outcome="ok" if passed else "failed",
+            permission="modify",
+            session_id=session_id,
+            method=method,
+            independent=independent,
+            passed=passed,
+        )
+
     if not passed:
         return transition(
             store,
@@ -328,16 +332,17 @@ def verify(
     task.status = VERIFIED
     task.verified_at = utcnow()
     task.updated_at = task.verified_at
-    _save(store, task)
-    events.record(
-        store,
-        "task.transition",
-        verifier,
-        target=task_id,
-        permission="modify",
-        session_id=session_id,
-        **{"from": COMPLETED, "to": VERIFIED},
-    )
+    with store.transaction():
+        _save(store, task)
+        events.record(
+            store,
+            "task.transition",
+            verifier,
+            target=task_id,
+            permission="modify",
+            session_id=session_id,
+            **{"from": COMPLETED, "to": VERIFIED},
+        )
     return task
 
 

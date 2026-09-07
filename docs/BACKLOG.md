@@ -73,6 +73,61 @@ the point.
 - **Constraint.** Maturity ladder (s40): manual -> repeatable -> tested ->
   automated -> monitored. No jumping straight to autonomy.
 
+## Added by the Task 1 acceptance audit
+
+Non-critical improvements found during the audit and deliberately **not**
+implemented, each with the trigger that would justify it.
+
+### Pre-migration snapshot / schema rollback
+- **Limitation.** Migrations are forward-only. There is no down-step and no
+  automatic backup, so a bad migration is recovered by restoring the database
+  file by hand.
+- **Why not now.** Only schema v1 exists and it has never been migrated over
+  live data, so there is nothing yet to roll back from.
+- **Trigger.** The first migration that transforms existing rows - which Task 2
+  (persistent memory) will almost certainly introduce. Build it *before* that
+  migration ships, not after.
+- **Verification.** Restore from the snapshot into a scratch store and confirm
+  the pre-migration state is byte-identical.
+
+### CLI does not catch database-level errors
+- **Limitation.** `main()` catches `ValueError`, `KeyError`, `RuntimeError`,
+  `TransitionError` and `AuthorityError`; a `sqlite3.Error` escapes as a raw
+  traceback.
+- **Why not now.** It fails loudly and truthfully, which is the behaviour that
+  matters. Only the presentation is poor.
+- **Trigger.** A user-facing release, or the first report of confusion from a
+  traceback.
+
+### Abandoned sessions are never marked
+- **Limitation.** A session whose process dies stays open forever; `boot()`
+  handles it correctly but nothing records that it ended abnormally.
+- **Trigger.** More than an occasional stale session, or a metric that needs
+  accurate session durations.
+
+### Multi-writer concurrency beyond first open
+- **Limitation.** The first-open race is fixed and `busy_timeout` is set to
+  5s, but sustained concurrent writing from several processes is untested
+  beyond the audit's 8-process stress.
+- **Trigger.** Two sessions routinely operating on one database - which agent
+  orchestration would introduce.
+
+### Structured episode recording
+- **Limitation.** s7.2 lists the fields an episode should carry (approach,
+  outcome, cause, correction, lesson). Today an episode is an `episodic`
+  memory with a free-form `payload`; the structure is representable but not
+  enforced or queryable.
+- **Trigger.** Task 2, which is explicitly about persistent memory. Enforcing
+  the shape before there are real episodes to shape it around would be guessing.
+
+### Enforcement for the remaining permission categories
+- **Limitation.** Only the objective-closing boundary is enforced.
+- **Trigger.** The first capability that can take a consequential external
+  action - a tool that writes outside the store, sends anything, or deletes.
+  Recording is sufficient while every action is local and reversible.
+- **Note.** This should be built together with actor authentication; gating on
+  a self-declared identity provides confidence without security.
+
 ## Known limitations of what is built
 
 Recorded so they are not mistaken for finished work:
@@ -91,7 +146,19 @@ Recorded so they are not mistaken for finished work:
    not prove the recovery was causal rather than a lucky retry.
 5. **No concurrency control.** Single-writer SQLite; two simultaneous sessions
    against one database are untested.
-6. **Permission categories are recorded, not enforced.** The audit log captures
-   which category an action needed and who authorized it; nothing yet blocks an
-   unauthorized action. That gap is deliberate - enforcement without a real
-   authority model would be theatre - and is the next security-relevant step.
+6. **Permission categories are recorded, not enforced - with one exception.**
+   Only `objectives.set_status` is gated (protocol s64 reserves objectives to
+   the user). Every other category is audited, not blocked. Attribution is now
+   truthful, which is the part that had to be fixed; gating the rest waits for
+   the trigger above.
+7. **Actor identity is self-declared.** The log records who an action claims to
+   be. Nothing authenticates it, so the audit trail is honest about *what*
+   happened but trusts the caller about *who*.
+8. **Migration is serialised but not reversible.** Concurrent first-open is
+   safe; a bad migration still needs a manual file restore.
+9. **The CLI cannot store sensitivity-flagged content at all.** `--force`
+   overrides the value threshold only; the sensitivity gate needs
+   `allow_sensitive=True`, which is API-only. So a legitimate note that merely
+   *mentions* a credential ("the key lives in 1Password") cannot be added from
+   the command line. Deliberate for V1 - the safe direction to fail - and the
+   trigger to revisit is a real note being blocked in practice.

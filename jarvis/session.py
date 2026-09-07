@@ -38,7 +38,7 @@ def boot(
         "INSERT INTO sessions (id, started_at, ended_at, summary, note) VALUES (?,?,NULL,NULL,?)",
         (session_id, started, project or ""),
     )
-    store.commit()
+    store.commit()  # the session row must exist before events reference it
 
     since = previous["ended_at"] or previous["started_at"] if previous else None
     changed = _changes_since(store, since) if since else []
@@ -167,12 +167,6 @@ def close(
     failed = sorted({t for t, d in transitions if d.get("to") == task_mod.FAILED})
 
     ended = utcnow()
-    store.execute(
-        "UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?",
-        (ended, summary, session_id),
-    )
-    store.commit()
-
     open_now = task_mod.list_tasks(store, open_only=True)
     report = {
         "session_id": session_id,
@@ -189,17 +183,23 @@ def close(
         "events_recorded": len(session_events),
         "carry_forward": _carry_forward(store, completed, open_now),
     }
-    events.record(
-        store,
-        "session.close",
-        actor,
-        target=session_id,
-        permission="modify",
-        session_id=session_id,
-        verified=len(verified),
-        completed_unverified=len(completed),
-        failed=len(failed),
-    )
+    # Closing the session and recording that it closed commit together.
+    with store.transaction():
+        store.execute(
+            "UPDATE sessions SET ended_at = ?, summary = ? WHERE id = ?",
+            (ended, summary, session_id),
+        )
+        events.record(
+            store,
+            "session.close",
+            actor,
+            target=session_id,
+            permission="modify",
+            session_id=session_id,
+            verified=len(verified),
+            completed_unverified=len(completed),
+            failed=len(failed),
+        )
     return report
 
 

@@ -10,16 +10,138 @@ class CapabilityHonestyTest(unittest.TestCase):
 
     def test_every_claimed_capability_resolves_to_real_code(self):
         for capability, path in diagnostics.IMPLEMENTED.items():
-            module_name, attr = path.split(":")
-            module = importlib.import_module(module_name)
+            module_name, dotted = path.split(":")
+            target = importlib.import_module(module_name)
+            for attr in dotted.split("."):
+                self.assertTrue(
+                    hasattr(target, attr),
+                    f"{capability} claims {path}, which does not exist",
+                )
+                target = getattr(target, attr)
+            # A claim may point at a callable or at a definition it enforces
+            # (the failure taxonomy, say) - but never at something empty.
             self.assertTrue(
-                hasattr(module, attr), f"{capability} claims {path}, which does not exist"
+                callable(target) or bool(target),
+                f"{capability} claims {path}, which is empty",
             )
 
     def test_claimed_and_disclaimed_capabilities_do_not_overlap(self):
         self.assertEqual(
             set(diagnostics.IMPLEMENTED) & set(diagnostics.NOT_IMPLEMENTED), set()
         )
+
+    def test_every_claimed_capability_actually_functions(self):
+        """Existence is not function. Each claim is exercised end to end here,
+        so `doctor` cannot advertise a capability that merely has a name."""
+        from jarvis import events, memory, objectives, retrieval, session, store as store_mod
+
+        exercised = {}
+        s = open_store(":memory:")
+
+        exercised["persistent_state"] = s.schema_version() == store_mod.SCHEMA_VERSION
+
+        events.record(s, "probe", "auditor", permission="read")
+        exercised["audit_log"] = events.recent(s)[0]["kind"] == "probe"
+
+        try:
+            with events.action(s, "probe.fail", "auditor"):
+                raise RuntimeError("x")
+        except RuntimeError:
+            pass
+        exercised["traced_actions"] = events.recent(s)[0]["outcome"] == "failed"
+
+        obj = objectives.create(
+            s, "probe", "an outcome", actor="auditor", open_questions=["q?"]
+        )
+        exercised["objective_representation"] = obj.is_ready is False and bool(obj.readiness_gaps())
+
+        first = tasks.create(s, "first", actor="auditor")
+        second = tasks.create(s, "second", actor="auditor", depends_on=[first.id])
+        exercised["dependency_gating"] = tasks.unmet_dependencies(s, second.id) == [first.id]
+
+        tasks.transition(s, first.id, tasks.IN_PROGRESS, actor="auditor")
+        tasks.transition(s, first.id, tasks.COMPLETED, actor="auditor")
+        exercised["task_state_machine"] = tasks.get(s, first.id).status == tasks.COMPLETED
+
+        tasks.verify(s, first.id, method="probe", evidence="checked", verifier="critic")
+        record = tasks.verifications(s, first.id)[0]
+        exercised["verification_records"] = (
+            tasks.get(s, first.id).status == tasks.VERIFIED and record["independent"] == 1
+        )
+
+        try:
+            tasks.transition(s, second.id, tasks.FAILED, actor="auditor")
+            exercised["failure_classification"] = False
+        except ValueError:
+            tasks.transition(
+                s, second.id, tasks.FAILED, actor="auditor", failure_class="tool_failure"
+            )
+            exercised["failure_classification"] = (
+                tasks.get(s, second.id).failure_class == "tool_failure"
+            )
+
+        mem = memory.remember(
+            s, kind="semantic", title="Probe port", body="listens on 8080",
+            source="probe", source_class="sourced_knowledge", confidence=0.9, decay=0.9,
+        )
+        exercised["memory_write"] = memory.get(s, mem.id) is not None
+
+        low = memory.assess(
+            s, kind="episodic", title="trivial", body="nothing worth keeping",
+            confidence=0.1, durability=0.1, utility=0.1,
+        )
+        exercised["memory_governance"] = low.decision == memory.SKIP
+
+        exercised["knowledge_decay"] = mem.review_after is not None
+        s.execute(
+            "UPDATE memories SET review_after = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (mem.id,),
+        )
+        s.commit()
+        exercised["knowledge_decay"] = bool(memory.stale(s))
+
+        memory.remember(s, kind="semantic", title="Probe port", body="listens on 9090")
+        result = retrieval.retrieve(s, "which probe port is used", actor="auditor")
+        exercised["ranked_retrieval"] = len(result.hits) >= 1 and all(
+            h.components for h in result.hits
+        )
+        exercised["contradiction_detection"] = len(result.conflicts) == 1
+
+        m = diagnostics.metrics(s)
+        exercised["metrics"] = m["tasks"]["total"] == 2 and m["verification"]["records"] == 1
+        exercised["health_checks"] = diagnostics.health(s)["status"] in ("ok", "warn", "fail")
+
+        try:
+            objectives.set_status(s, obj.id, "achieved", actor="auditor")
+            exercised["authority_boundary"] = False
+        except objectives.AuthorityError:
+            exercised["authority_boundary"] = objectives.get(s, obj.id).status == "open"
+
+        try:
+            memory.remember(s, kind="user", title="creds", body="password: hunter2")
+            exercised["sensitivity_gate"] = False
+        except memory.SensitiveContentError:
+            exercised["sensitivity_gate"] = True
+
+        try:
+            with s.transaction():
+                s.execute("INSERT INTO sessions (id, started_at) VALUES ('probe','t')")
+                raise RuntimeError("rollback")
+        except RuntimeError:
+            pass
+        exercised["atomic_writes"] = (
+            s.one("SELECT COUNT(*) FROM sessions WHERE id = 'probe'")[0] == 0
+        )
+
+        sid = session.boot(s, actor="auditor")["session_id"]
+        report = session.close(s, sid, summary="probe", actor="auditor")
+        exercised["session_boot_close"] = report["session_id"] == sid
+
+        unproven = sorted(k for k, v in exercised.items() if not v)
+        self.assertEqual(unproven, [], f"claimed but not demonstrated: {unproven}")
+
+        missing = sorted(set(diagnostics.IMPLEMENTED) - set(exercised))
+        self.assertEqual(missing, [], f"claimed capabilities never exercised: {missing}")
 
 
 class MetricsTest(unittest.TestCase):

@@ -131,7 +131,7 @@ class ConflictTest(unittest.TestCase):
 
     def test_unknown_resolution_rejected(self):
         with self.assertRaises(ValueError):
-            retrieval.resolve_conflict(self.store, "cfl_x", "whatever")
+            retrieval.resolve_conflict(self.store, "cfl_x", "whatever", actor="user")
 
 
 if __name__ == "__main__":

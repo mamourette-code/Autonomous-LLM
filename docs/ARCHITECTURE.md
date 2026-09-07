@@ -53,7 +53,13 @@ behaviour, and each is enforced in code and covered by a test:
 | Heavy-but-partial overlap returns a supersede candidate instead of vanishing | `memory.assess` | s10 - a revision is not a duplicate |
 | Corrections supersede rather than delete | `memory.supersede` | s12 - "what did we believe, and when" stays answerable |
 | An unmeasured rate reports `None`, not `0%` | `diagnostics._ratio` | s63 - no evidence is not the same as a zero score |
-| Claimed capabilities must resolve to real code | `tests/test_diagnostics.py` | s57 - do not claim what is not verified |
+| Claimed capabilities must resolve to real code **and be exercised end to end** | `tests/test_diagnostics.py` | s57 - existence is not function |
+| A state change and its audit event commit together or not at all | `store.transaction` | s35/s43 - state with no trail is unauditable |
+| `authorized_by` names a real authorization by the acting party, never the record's stored authority | `objectives.create`, `objectives.set_status` | s35 - a fabricated authorization is worse than none |
+| `actor` is required on every mutation a human could be blamed for | `objectives`, `retrieval` | s35 - the log must not name someone who did not act |
+| Only an objective's authority may declare it achieved or abandoned | `objectives.set_status` | s64 - objectives are the user's |
+| The sensitivity scan runs on the write path, not only in `assess()` | `memory.remember` | s8 - governance the write path can skip is not governance |
+| Schema migration is serialised across processes | `store.migrate` | reliable execution - a first-open race lost a process's writes |
 
 ## Data model
 
@@ -97,6 +103,27 @@ disagreement twice over - a contradicting fact looks like a near-duplicate, and
 a low-confidence contradiction falls under the value threshold - and in both
 cases the older belief would quietly win. Both exemptions exist for that reason,
 and both are covered by regression tests derived from the actual failures.
+
+## Authority model (V1)
+
+Permission categories and authorizations are **recorded**; with one exception
+they are **not enforced**. The exception is `objectives.set_status`: protocol
+s64 reserves objectives to the user, so only an objective's authority may
+declare it achieved or abandoned, and a refused attempt is recorded as a
+`denied` event.
+
+That line is drawn deliberately. The acceptance audit found that the previous
+code did something worse than failing to enforce: it *fabricated* authorization,
+copying an objective's stored authority into `authorized_by` regardless of who
+acted, and defaulting `actor` to `"user"` on three mutating functions. A log
+that records a user approval which never happened is more dangerous than a log
+that records nothing, so the fix was to make attribution truthful and to gate
+the one operation the protocol explicitly reserves.
+
+What is **not** enforced, and is stated as such by `jarvis doctor`: every other
+permission category, and actor identity itself. An actor is self-declared - the
+log records who an action *claims* to be. Authenticating that requires an
+identity model this environment has no basis for yet.
 
 ## What is deliberately absent
 

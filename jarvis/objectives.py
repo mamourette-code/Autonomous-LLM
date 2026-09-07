@@ -18,6 +18,11 @@ from jarvis.store import Store, new_id, utcnow
 
 STATUSES = ("open", "achieved", "abandoned")
 
+
+class AuthorityError(PermissionError):
+    """Raised when an actor attempts something reserved to the objective's authority."""
+
+
 _JSON_FIELDS = ("constraints", "assumptions", "open_questions", "verification", "risks")
 
 
@@ -100,42 +105,46 @@ def create(
         created_at=now,
         updated_at=now,
     )
-    store.execute(
-        """INSERT INTO objectives
-           (id, title, desired_outcome, constraints, priority, deadline, assumptions,
-            open_questions, verification, risks, authority, project, status,
-            created_at, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            obj.id,
-            obj.title,
-            obj.desired_outcome,
-            json.dumps(obj.constraints),
-            obj.priority,
-            obj.deadline,
-            json.dumps(obj.assumptions),
-            json.dumps(obj.open_questions),
-            json.dumps(obj.verification),
-            json.dumps(obj.risks),
-            obj.authority,
-            obj.project,
-            obj.status,
-            obj.created_at,
-            obj.updated_at,
-        ),
-    )
-    store.commit()
-    events.record(
-        store,
-        "objective.create",
-        actor,
-        target=obj.id,
-        permission="create",
-        authorized_by=authority,
-        session_id=session_id,
-        title=title,
-        ready=obj.is_ready,
-    )
+    with store.transaction():
+        store.execute(
+            """INSERT INTO objectives
+               (id, title, desired_outcome, constraints, priority, deadline, assumptions,
+                open_questions, verification, risks, authority, project, status,
+                created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                obj.id,
+                obj.title,
+                obj.desired_outcome,
+                json.dumps(obj.constraints),
+                obj.priority,
+                obj.deadline,
+                json.dumps(obj.assumptions),
+                json.dumps(obj.open_questions),
+                json.dumps(obj.verification),
+                json.dumps(obj.risks),
+                obj.authority,
+                obj.project,
+                obj.status,
+                obj.created_at,
+                obj.updated_at,
+            ),
+        )
+        events.record(
+            store,
+            "objective.create",
+            actor,
+            target=obj.id,
+            permission="create",
+            # authorized_by names a real authorization by the acting party.
+            # Copying the record's authority here would assert the user
+            # approved something they never saw (s35: the trail must be true).
+            authorized_by=actor if actor == authority else None,
+            session_id=session_id,
+            authority=authority,
+            title=title,
+            ready=obj.is_ready,
+        )
     return obj
 
 
@@ -145,46 +154,74 @@ def get(store: Store, objective_id: str) -> Objective | None:
 
 
 def resolve_question(
-    store: Store, objective_id: str, question: str, answer: str, *, actor: str = "user"
+    store: Store, objective_id: str, question: str, answer: str, *, actor: str
 ) -> Objective:
-    """Answer an open question; the answer is retained as a stated assumption."""
+    """Answer an open question; the answer is retained as a stated assumption.
+
+    `actor` is required: defaulting it to "user" wrote the user's name into the
+    audit trail for answers the model had supplied itself.
+    """
     obj = _require(store, objective_id)
     if question not in obj.open_questions:
         raise ValueError(f"objective {objective_id} has no open question {question!r}")
     obj.open_questions = [q for q in obj.open_questions if q != question]
     obj.assumptions = obj.assumptions + [f"{question} -> {answer}"]
-    _save(store, obj)
-    events.record(
-        store,
-        "objective.resolve_question",
-        actor,
-        target=obj.id,
-        permission="modify",
-        question=question,
-        answer=answer,
-    )
+    with store.transaction():
+        _save(store, obj)
+        events.record(
+            store,
+            "objective.resolve_question",
+            actor,
+            target=obj.id,
+            permission="modify",
+            question=question,
+            answer=answer,
+        )
     return obj
 
 
 def set_status(
-    store: Store, objective_id: str, status: str, *, actor: str = "user", note: str = ""
+    store: Store, objective_id: str, status: str, *, actor: str, note: str = ""
 ) -> Objective:
-    """Close an objective. Only the authority may declare it achieved (s64)."""
+    """Close an objective.
+
+    This is the single authority boundary V1 enforces. Protocol s64 reserves
+    objectives to the user, and declaring one achieved or abandoned is the act
+    that ends it - so only the objective's authority may do it. Everything else
+    in this package records permissions without enforcing them; see
+    docs/BACKLOG.md for why that line is drawn here.
+    """
     if status not in STATUSES:
         raise ValueError(f"unknown objective status {status!r}; expected {STATUSES}")
     obj = _require(store, objective_id)
+    if actor != obj.authority:
+        events.record(
+            store,
+            "objective.status",
+            actor,
+            target=obj.id,
+            outcome="denied",
+            permission="administrative",
+            requested_status=status,
+            required_authority=obj.authority,
+        )
+        raise AuthorityError(
+            f"only {obj.authority!r} may declare objective {objective_id} {status!r}; "
+            f"{actor!r} may not"
+        )
     obj.status = status
-    _save(store, obj)
-    events.record(
-        store,
-        "objective.status",
-        actor,
-        target=obj.id,
-        permission="modify",
-        authorized_by=obj.authority,
-        status=status,
-        note=note,
-    )
+    with store.transaction():
+        _save(store, obj)
+        events.record(
+            store,
+            "objective.status",
+            actor,
+            target=obj.id,
+            permission="administrative",
+            authorized_by=actor,
+            status=status,
+            note=note,
+        )
     return obj
 
 

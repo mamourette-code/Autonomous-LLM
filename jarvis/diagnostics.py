@@ -24,6 +24,7 @@ from jarvis.store import Store, SCHEMA_VERSION
 # claimed capability resolves to a real callable.
 IMPLEMENTED: dict[str, str] = {
     "persistent_state": "jarvis.store:open_store",
+    "atomic_writes": "jarvis.store:Store.transaction",
     "audit_log": "jarvis.events:record",
     "traced_actions": "jarvis.events:action",
     "objective_representation": "jarvis.objectives:create",
@@ -39,9 +40,24 @@ IMPLEMENTED: dict[str, str] = {
     "metrics": "jarvis.diagnostics:metrics",
     "health_checks": "jarvis.diagnostics:health",
     "session_boot_close": "jarvis.session:boot",
+    "authority_boundary": "jarvis.objectives:AuthorityError",
+    "sensitivity_gate": "jarvis.memory:SensitiveContentError",
 }
 
 NOT_IMPLEMENTED: dict[str, str] = {
+    "permission_enforcement": (
+        "permission categories and authorizations are recorded, but only one boundary is "
+        "enforced (an objective may be closed solely by its authority); every other "
+        "category is audited, not gated"
+    ),
+    "actor_authentication": (
+        "an actor's identity is self-declared; the log records who an action claims to be, "
+        "which is not proof of who it was"
+    ),
+    "schema_rollback": (
+        "migrations are forward-only with no down-step and no pre-migration snapshot; "
+        "recovering from a bad migration means restoring the database file by hand"
+    ),
     "planning_engine": "no decomposition or replanning exists; plans are external to this package",
     "agent_orchestration": "no agent registry, delegation or inter-agent protocol",
     "skill_registry": "no executable reusable procedures are stored or versioned",

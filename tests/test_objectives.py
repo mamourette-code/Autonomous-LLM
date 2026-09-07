@@ -38,7 +38,7 @@ class ObjectivesTest(unittest.TestCase):
     def test_unknown_question_rejected(self):
         obj = objectives.create(self.store, "t", "o")
         with self.assertRaises(ValueError):
-            objectives.resolve_question(self.store, obj.id, "nope", "x")
+            objectives.resolve_question(self.store, obj.id, "nope", "x", actor="claude")
 
     def test_creation_is_audited(self):
         obj = objectives.create(self.store, "t", "o")

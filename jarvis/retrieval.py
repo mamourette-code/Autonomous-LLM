@@ -195,28 +195,34 @@ def open_conflicts(store: Store) -> list[dict[str, Any]]:
 
 
 def resolve_conflict(
-    store: Store, conflict_id: str, resolution: str, *, actor: str = "user", note: str = ""
+    store: Store, conflict_id: str, resolution: str, *, actor: str, note: str = ""
 ) -> None:
-    """Record how a contradiction was settled. Only a human resolves by fiat."""
+    """Record how a contradiction was settled.
+
+    `actor` is required and is not enforced to be a human: the model may
+    legitimately resolve a conflict it has evidence for. What must be true is
+    that the log says who actually decided - the previous default attributed
+    every resolution to the user.
+    """
     if resolution not in ("left", "right", "both_contextual", "neither", "unresolved"):
         raise ValueError(f"unknown resolution {resolution!r}")
     row = store.one("SELECT id FROM memory_conflicts WHERE id = ?", (conflict_id,))
     if row is None:
         raise KeyError(f"no such conflict: {conflict_id}")
-    store.execute(
-        "UPDATE memory_conflicts SET resolution = ?, note = ? WHERE id = ?",
-        (resolution, note, conflict_id),
-    )
-    store.commit()
-    events.record(
-        store,
-        "memory.conflict_resolved",
-        actor,
-        target=conflict_id,
-        permission="modify",
-        resolution=resolution,
-        note=note,
-    )
+    with store.transaction():
+        store.execute(
+            "UPDATE memory_conflicts SET resolution = ?, note = ? WHERE id = ?",
+            (resolution, note, conflict_id),
+        )
+        events.record(
+            store,
+            "memory.conflict_resolved",
+            actor,
+            target=conflict_id,
+            permission="modify",
+            resolution=resolution,
+            note=note,
+        )
 
 
 def _persist_conflict(store: Store, left: str, right: str, reason: str, actor: str) -> None:
@@ -227,16 +233,17 @@ def _persist_conflict(store: Store, left: str, right: str, reason: str, actor: s
     )
     if existing:
         return
-    store.execute(
-        """INSERT INTO memory_conflicts (id, left_id, right_id, detected_by, note, resolution, created_at)
-           VALUES (?,?,?,?,?,'unresolved',?)""",
-        (new_id("cfl"), left, right, actor, reason, utcnow()),
-    )
-    store.commit()
-    events.record(
-        store, "memory.conflict_detected", actor, target=left, permission="create",
-        other=right, reason=reason,
-    )
+    with store.transaction():
+        store.execute(
+            """INSERT INTO memory_conflicts
+               (id, left_id, right_id, detected_by, note, resolution, created_at)
+               VALUES (?,?,?,?,?,'unresolved',?)""",
+            (new_id("cfl"), left, right, actor, reason, utcnow()),
+        )
+        events.record(
+            store, "memory.conflict_detected", actor, target=left, permission="create",
+            other=right, reason=reason,
+        )
 
 
 def _candidates(store: Store, kinds: list[str] | None, project: str | None) -> list[Memory]:
