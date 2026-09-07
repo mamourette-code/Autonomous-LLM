@@ -33,7 +33,12 @@ class CapabilityHonestyTest(unittest.TestCase):
     def test_every_claimed_capability_actually_functions(self):
         """Existence is not function. Each claim is exercised end to end here,
         so `doctor` cannot advertise a capability that merely has a name."""
-        from jarvis import events, memory, objectives, retrieval, session, store as store_mod
+        import tempfile
+
+        from jarvis import (
+            events, memory, objectives, retrieval, session, snapshot,
+            store as store_mod,
+        )
 
         exercised = {}
         s = open_store(":memory:")
@@ -132,6 +137,15 @@ class CapabilityHonestyTest(unittest.TestCase):
         exercised["atomic_writes"] = (
             s.one("SELECT COUNT(*) FROM sessions WHERE id = 'probe'")[0] == 0
         )
+
+        with tempfile.TemporaryDirectory() as snap_dir:
+            snap = snapshot.create(s, actor="auditor", directory=snap_dir, reason="probe")
+            exercised["pre_migration_snapshot"] = (
+                snap.is_valid
+                and snap.schema_version == store_mod.SCHEMA_VERSION
+                and snapshot.verify(snap)["ok"]
+                and snap.tables["tasks"] == 2
+            )
 
         sid = session.boot(s, actor="auditor")["session_id"]
         report = session.close(s, sid, summary="probe", actor="auditor")

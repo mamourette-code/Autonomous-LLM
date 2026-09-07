@@ -19,6 +19,7 @@ from jarvis import (
     objectives as obj_mod,
     retrieval,
     session as session_mod,
+    snapshot as snapshot_mod,
     tasks as task_mod,
 )
 from jarvis.store import open_store
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             RuntimeError,
             task_mod.TransitionError,
             obj_mod.AuthorityError,
+            snapshot_mod.SnapshotError,
         ) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
@@ -264,6 +266,51 @@ def _cmd_memory(store, args) -> Any:
     raise ValueError(f"unknown memory action {args.action!r}")
 
 
+def _cmd_snapshot(store, args) -> Any:
+    if args.action == "create":
+        snap = snapshot_mod.create(
+            store,
+            actor=args.actor,
+            reason=args.reason or "",
+            directory=args.dir,
+            label=args.label,
+            session_id=args.session,
+        )
+        return _snapshot_dict(snap)
+    if args.action == "list":
+        return [_snapshot_dict(s) for s in snapshot_mod.list_snapshots(store, directory=args.dir)]
+    if args.action == "verify":
+        if args.path:
+            return {"path": args.path, **snapshot_mod.inspect(args.path)}
+        snapshots = snapshot_mod.list_snapshots(store, directory=args.dir)
+        if not snapshots:
+            return {"checked": 0, "snapshots": []}
+        return {
+            "checked": len(snapshots),
+            "snapshots": [
+                {"id": s.id, "path": s.path, **snapshot_mod.verify(s)} for s in snapshots
+            ],
+        }
+    raise ValueError(f"unknown snapshot action {args.action!r}")
+
+
+def _snapshot_dict(snap) -> dict[str, Any]:
+    return {
+        "id": snap.id,
+        "created_at": snap.created_at,
+        "source": snap.source,
+        "schema_version": snap.schema_version,
+        "path": snap.path,
+        "size_bytes": snap.size_bytes,
+        "integrity": snap.integrity,
+        "foreign_key_check": snap.foreign_key_check,
+        "result": snap.result,
+        "valid": snap.is_valid,
+        "reason": snap.reason,
+        "rows": snap.tables,
+    }
+
+
 def _cmd_events(store, args) -> Any:
     if args.target:
         return event_mod.for_target(store, args.target)
@@ -309,6 +356,12 @@ def _render_doctor(report: dict[str, Any]) -> None:
         f"memory: {mem['live']} live, {_pct(mem['utilization'])} ever retrieved, "
         f"{mem['stale']} stale, {mem['open_conflicts']} unresolved conflicts"
     )
+    recovery = next(
+        (c for c in health["checks"] if c["name"] == "recovery_point"), None
+    )
+    if recovery:
+        print(f"\nrecovery point: [{_STATUS_MARK.get(recovery['status'], recovery['status'])}] "
+              f"{recovery['detail']}")
     if report["open_tasks"]:
         print(f"\nopen tasks ({len(report['open_tasks'])}):")
         for t in report["open_tasks"][:10]:
@@ -494,6 +547,14 @@ def _build_parser() -> argparse.ArgumentParser:
     mem.add_argument("--limit", type=int, default=8)
     mem.add_argument("--force", action="store_true", help="store despite an adverse assessment")
     mem.set_defaults(func=_cmd_memory)
+
+    snap = add("snapshot", "pre-migration snapshots")
+    snap.add_argument("action", choices=["create", "list", "verify"])
+    snap.add_argument("--reason", help="why this recovery point is being taken")
+    snap.add_argument("--label", help="short tag added to the filename")
+    snap.add_argument("--dir", help="snapshot directory (default: snapshots/ beside the db)")
+    snap.add_argument("--path", help="verify one snapshot file by path")
+    snap.set_defaults(func=_cmd_snapshot)
 
     ev = add("events", "audit log")
     ev.add_argument("--limit", type=int, default=25)

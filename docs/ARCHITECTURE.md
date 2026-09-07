@@ -26,8 +26,10 @@ objectives           tasks                  memory            diagnostics
                               jarvis.events
                         (s35/s43: audit + traces)
                                    |
-                              jarvis.store
-                       (SQLite, schema, migrations)
+                              jarvis.store          <-- jarvis.snapshot
+                       (SQLite, schema, migrations)      (verified recovery
+                                                          points; see
+                                                          docs/SNAPSHOTS.md)
 ```
 
 Every subsystem writes through `events`, and every metric is derived from that
@@ -60,6 +62,8 @@ behaviour, and each is enforced in code and covered by a test:
 | Only an objective's authority may declare it achieved or abandoned | `objectives.set_status` | s64 - objectives are the user's |
 | The sensitivity scan runs on the write path, not only in `assess()` | `memory.remember` | s8 - governance the write path can skip is not governance |
 | Schema migration is serialised across processes | `store.migrate` | reliable execution - a first-open race lost a process's writes |
+| A snapshot is verified by opening it alone before it is called a recovery point | `snapshot.create`, `snapshot.inspect` | s57 - an unverified backup is a guess |
+| A snapshot corrupted after creation is never reported as a recovery point | `snapshot.valid_snapshots`, `diagnostics._snapshot_check` | s57 - recorded status is not current status |
 
 ## Data model
 

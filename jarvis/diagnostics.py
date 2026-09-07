@@ -16,7 +16,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from jarvis import memory as mem_mod, tasks as task_mod
+from jarvis import memory as mem_mod, snapshot as snapshot_mod, tasks as task_mod
 from jarvis.store import Store, SCHEMA_VERSION
 
 # Capabilities this package implements, and capabilities it deliberately does
@@ -40,6 +40,7 @@ IMPLEMENTED: dict[str, str] = {
     "metrics": "jarvis.diagnostics:metrics",
     "health_checks": "jarvis.diagnostics:health",
     "session_boot_close": "jarvis.session:boot",
+    "pre_migration_snapshot": "jarvis.snapshot:create",
     "authority_boundary": "jarvis.objectives:AuthorityError",
     "sensitivity_gate": "jarvis.memory:SensitiveContentError",
 }
@@ -55,8 +56,9 @@ NOT_IMPLEMENTED: dict[str, str] = {
         "which is not proof of who it was"
     ),
     "schema_rollback": (
-        "migrations are forward-only with no down-step and no pre-migration snapshot; "
-        "recovering from a bad migration means restoring the database file by hand"
+        "migrations are forward-only with no down-step; a verified snapshot can be taken "
+        "beforehand (jarvis snapshot create), but putting one back is a documented manual "
+        "step, not an automated rollback - see docs/SNAPSHOTS.md"
     ),
     "planning_engine": "no decomposition or replanning exists; plans are external to this package",
     "agent_orchestration": "no agent registry, delegation or inter-agent protocol",
@@ -237,6 +239,11 @@ def health(store: Store) -> dict[str, Any]:
                f"{conflicts} unresolved contradiction(s) awaiting a decision")
     )
 
+    # Recovery point. The question is whether a verified snapshot exists for
+    # the state the database is in *now* - that is what a migration would
+    # destroy. An empty store has nothing worth a recovery point yet.
+    checks.append(_snapshot_check(store))
+
     # Stuck work.
     stuck = _scalar(
         store, "SELECT COUNT(*) FROM tasks WHERE status IN ('blocked','waiting','failed')"
@@ -275,6 +282,17 @@ def self_report(store: Store) -> dict[str, Any]:
             {"id": t.id, "title": t.title, "class": t.failure_class, "note": t.failure_note}
             for t in task_mod.list_tasks(store, status=task_mod.FAILED)
         ],
+        "snapshots": [
+            {
+                "id": snap.id,
+                "created_at": snap.created_at,
+                "schema_version": snap.schema_version,
+                "path": snap.path,
+                "valid": snap.is_valid and snapshot_mod.verify(snap)["ok"],
+                "size_bytes": snap.size_bytes,
+            }
+            for snap in snapshot_mod.list_snapshots(store)[:5]
+        ],
         "health": health(store),
         "metrics": metrics(store),
     }
@@ -297,6 +315,48 @@ def _recovered_failures(store: Store) -> dict[str, int]:
         if row and row["status"] in (task_mod.COMPLETED, task_mod.VERIFIED):
             recovered += 1
     return {"failures": failures, "recovered": recovered}
+
+
+def _snapshot_check(store: Store) -> dict[str, str]:
+    """Report whether a valid pre-migration recovery point exists."""
+    if store.path == ":memory:":
+        return _check(
+            "recovery_point", "ok", "in-memory store is ephemeral; snapshots do not apply"
+        )
+    version = store.schema_version()
+    populated = any(
+        _scalar(store, f"SELECT COUNT(*) FROM {table}")
+        for table in ("objectives", "tasks", "memories", "sessions")
+    )
+    current = snapshot_mod.latest_valid(store, schema_version=version)
+    every = snapshot_mod.list_snapshots(store)
+
+    if current:
+        return _check(
+            "recovery_point",
+            "ok",
+            f"verified snapshot for schema v{version} taken {current.created_at[:19]} "
+            f"({current.path})",
+        )
+    if not populated:
+        return _check("recovery_point", "ok", "store is empty; nothing to snapshot yet")
+    # Re-verified, not taken on trust: a file corrupted since it was written
+    # must not be counted as a recovery point.
+    older = snapshot_mod.valid_snapshots(store)
+    if older:
+        return _check(
+            "recovery_point",
+            "warn",
+            f"no verified snapshot for the current schema (v{version}); newest valid "
+            f"snapshot is v{older[0].schema_version} - run: jarvis snapshot create",
+        )
+    detail = "no snapshot exists - run: jarvis snapshot create"
+    if every:
+        detail = (
+            f"{len(every)} snapshot file(s) found but none verified - "
+            "run: jarvis snapshot create"
+        )
+    return _check("recovery_point", "warn", detail)
 
 
 def _check(name: str, status: str, detail: str) -> dict[str, str]:

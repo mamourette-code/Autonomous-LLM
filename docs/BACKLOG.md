@@ -78,17 +78,26 @@ the point.
 Non-critical improvements found during the audit and deliberately **not**
 implemented, each with the trigger that would justify it.
 
-### Pre-migration snapshot / schema rollback
-- **Limitation.** Migrations are forward-only. There is no down-step and no
-  automatic backup, so a bad migration is recovered by restoring the database
-  file by hand.
-- **Why not now.** Only schema v1 exists and it has never been migrated over
-  live data, so there is nothing yet to roll back from.
-- **Trigger.** The first migration that transforms existing rows - which Task 2
-  (persistent memory) will almost certainly introduce. Build it *before* that
-  migration ships, not after.
-- **Verification.** Restore from the snapshot into a scratch store and confirm
-  the pre-migration state is byte-identical.
+### Pre-migration snapshot — IMPLEMENTED (Task 1 final hardening)
+- Delivered in `jarvis/snapshot.py`; see `docs/SNAPSHOTS.md`.
+- Verified snapshots via SQLite's online backup API, checked immediately with
+  `integrity_check` and `foreign_key_check`, reported by `doctor` as a
+  `recovery_point` health check.
+- **Still open: automated restore / down-migrations.** Restore is a documented
+  manual procedure, deliberately. A snapshot returns the database to a previous
+  *state*, not a previous *schema* applied to today's data.
+- **Trigger for automating restore.** A migration failure occurring often
+  enough that the manual procedure becomes the risk, or an unattended context
+  where no human is present to run it. Until then, code that can decide to
+  discard the live database is a larger hazard than the problem it solves.
+
+### Snapshot retention and pruning
+- **Limitation.** Nothing deletes old snapshots; they are full copies, so disk
+  use grows with every one taken.
+- **Why not now.** Deciding what is safe to delete is a judgement, and the
+  wrong default silently destroys the recovery point someone was relying on.
+- **Trigger.** Snapshot storage becoming a real constraint, or more than a
+  handful accumulating in normal use.
 
 ### CLI does not catch database-level errors
 - **Limitation.** `main()` catches `ValueError`, `KeyError`, `RuntimeError`,
@@ -154,8 +163,9 @@ Recorded so they are not mistaken for finished work:
 7. **Actor identity is self-declared.** The log records who an action claims to
    be. Nothing authenticates it, so the audit trail is honest about *what*
    happened but trusts the caller about *who*.
-8. **Migration is serialised but not reversible.** Concurrent first-open is
-   safe; a bad migration still needs a manual file restore.
+8. **Migration is serialised, and recoverable but not reversible.** Concurrent
+   first-open is safe, and a verified snapshot can be taken beforehand, but
+   putting one back is a manual procedure and costs everything written since.
 9. **The CLI cannot store sensitivity-flagged content at all.** `--force`
    overrides the value threshold only; the sensitivity gate needs
    `allow_sensitive=True`, which is API-only. So a legitimate note that merely

@@ -11,6 +11,7 @@ Standard library only — no dependencies to install.
 ```bash
 python3 -m jarvis doctor                     # what this system can and cannot do
 python3 -m jarvis boot --focus "the thing you are about to work on"
+python3 -m jarvis snapshot create --reason "before a migration"
 python3 -m jarvis task add --title "write the parser"
 python3 -m jarvis close ses_... --summary "what happened"
 ```
@@ -57,6 +58,15 @@ all. Metrics are derived from the log at read time, so they cannot drift. An
 unmeasured rate reports `n/a`, never `0%`. `doctor` reports health, metrics,
 open work — and the capabilities this system does **not** have.
 
+**Recovery points.** `jarvis snapshot create` takes a verified, self-contained
+copy of the database using SQLite's online backup API — safe to run while the
+database is in use, unlike a file copy. Each snapshot is checked immediately
+with `integrity_check` and `foreign_key_check` by opening it on its own, and
+carries a JSON sidecar recording its schema version, per-table row counts and
+provenance. `doctor` warns when a populated database has no verified snapshot
+for its current schema. Restore is a documented manual procedure, not an
+automated rollback — see [`docs/SNAPSHOTS.md`](docs/SNAPSHOTS.md).
+
 **Authority (s34/s64).** Permission categories and authorizations are recorded.
 One boundary is *enforced*: only an objective's authority may declare it
 achieved or abandoned, and a refused attempt is recorded as `denied`.
@@ -76,7 +86,7 @@ now actually measure.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -v   # 122 tests
+python3 -m unittest discover -s tests -v   # 154 tests
 ```
 
 `tests/test_audit_regressions.py` holds the regressions from the Task 1
@@ -90,3 +100,5 @@ acceptance audit — each one reproduces a defect the original suite passed over
   invariants, data model
 - [`docs/BACKLOG.md`](docs/BACKLOG.md) — capability gaps, their triggers, and
   the known limitations of what exists
+- [`docs/SNAPSHOTS.md`](docs/SNAPSHOTS.md) — how snapshots are made, and the
+  recovery procedure
