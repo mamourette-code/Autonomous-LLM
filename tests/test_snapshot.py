@@ -46,6 +46,7 @@ class SnapshotCreationTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.store = open_store(os.path.join(self.tmp.name, "jarvis.db"))
+        self.addCleanup(self.store.close)
 
     def test_snapshot_is_created_and_reported_valid(self):
         snap = snapshot.create(self.store, actor="claude", reason="before migration")
