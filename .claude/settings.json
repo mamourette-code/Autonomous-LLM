@@ -29,6 +29,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/jarvis-hook.sh stop"
+          }
+        ]
+      }
     ]
   }
 }
