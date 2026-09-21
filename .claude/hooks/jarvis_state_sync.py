@@ -116,10 +116,18 @@ def remote_url(project_dir: str) -> str:
     return _run(["git", "remote", "get-url", "origin"], cwd=project_dir).stdout.strip()
 
 
-def branch_exists_remote(project_dir: str, branch: str) -> bool:
-    r = _run(["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
-              cwd=project_dir, check=False)
-    return r.returncode == 0 and bool(r.stdout.strip())
+def remote_branch_fetch_ok(repo_dir: str, branch: str) -> bool:
+    """The authoritative existence check: an actual fetch, not a cached ref.
+
+    `git fetch` never removes a stale local refs/remotes/origin/<branch> on
+    its own (no --prune), so a worktree left over from before a remote
+    deletion would otherwise look fine forever to anything that only checks
+    local state. Fetching fresh, from wherever we're about to read from
+    (inside the worktree if it exists, the main repo otherwise), is what
+    actually tells us whether the remote branch is still there right now.
+    """
+    r = _run(["git", "fetch", "-q", "origin", branch], cwd=repo_dir, check=False)
+    return r.returncode == 0
 
 
 def bootstrap_branch(project_dir: str, branch: str) -> None:
@@ -144,24 +152,50 @@ def bootstrap_branch(project_dir: str, branch: str) -> None:
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+def _remove_stale_worktree(project_dir: str, wtd: str) -> None:
+    _run(["git", "worktree", "remove", "--force", wtd], cwd=project_dir, check=False)
+    shutil.rmtree(wtd, ignore_errors=True)
+    _run(["git", "worktree", "prune"], cwd=project_dir, check=False)
+
+
 def ensure_worktree(project_dir: str, branch: str, allow_bootstrap: bool = False) -> str:
     wtd = worktree_dir(branch)
-    if os.path.isdir(wtd):
-        _run(["git", "fetch", "-q", "origin", branch], cwd=wtd)
-        return wtd
+    had_worktree = os.path.isdir(wtd)
 
-    if not branch_exists_remote(project_dir, branch):
+    # The remote is checked fresh via fetch every time, regardless of whether
+    # a local worktree already exists - a worktree left over from before the
+    # branch was deleted on GitHub must never let a later sync resurrect it.
+    # Deleting the branch remotely must be a safe reset.
+    remote_ok = remote_branch_fetch_ok(wtd if had_worktree else project_dir, branch)
+
+    if not remote_ok:
+        if had_worktree:
+            _remove_stale_worktree(project_dir, wtd)
+        else:
+            _run(["git", "worktree", "prune"], cwd=project_dir, check=False)
+
         if not allow_bootstrap:
+            if had_worktree:
+                raise NoStateBranch(
+                    f"remote branch missing - not recreating (branch={branch!r}); "
+                    "stale local worktree removed"
+                )
             raise NoStateBranch(
-                f"branch {branch!r} does not exist yet and no local worktree exists; "
-                "only SessionStart's restore may create it"
+                f"branch {branch!r} does not exist on the remote; only SessionStart's "
+                "restore may create it"
             )
-        bootstrap_branch(project_dir, branch)
 
-    _run(["git", "fetch", "-q", "origin", branch], cwd=project_dir)
+        bootstrap_branch(project_dir, branch)
+        if not remote_branch_fetch_ok(project_dir, branch):
+            raise RuntimeError(
+                f"bootstrap of {branch!r} appeared to succeed but the branch is not "
+                "fetchable from origin"
+            )
+
+    if os.path.isdir(wtd):
+        return wtd  # already fetched fresh above, from inside it
+
     Path(wtd).parent.mkdir(parents=True, exist_ok=True)
-    # Prune any stale worktree registration (e.g. the directory was deleted by
-    # hand for a fresh-container simulation without `git worktree remove`).
     _run(["git", "worktree", "prune"], cwd=project_dir, check=False)
     have_local_branch = _run(["git", "rev-parse", "--verify", "-q", branch],
                               cwd=project_dir, check=False).returncode == 0
