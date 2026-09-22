@@ -1,0 +1,2 @@
+2026-09-22T14:15:42Z event=boot claude_session=28b067b0-683a-525c-a5fb-492ee3c4fbed exit=0 RESTORE_OK remote_head=746c74249f8f tables={'objectives': 0, 'tasks': 0, 'task_deps': 0, 'verifications': 0, 'memories': 0, 'memory_conflicts': 0, 'events': 0, 'sessions': 0}
+2026-09-22T14:15:42Z event=boot claude_session=28b067b0-683a-525c-a5fb-492ee3c4fbed exit=0 source=startup booted jarvis session ses_3898700453ba
