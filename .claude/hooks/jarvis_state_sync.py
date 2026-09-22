@@ -58,10 +58,35 @@ class NoStateBranch(RuntimeError):
     """
 
 
+class RemoteCheckError(RuntimeError):
+    """Could not determine whether the state branch exists on origin - a
+    transient error (network, DNS, auth, timeout), not a confirmed absence.
+
+    Callers must never treat this the same as "branch does not exist": it
+    must not trigger bootstrap-from-empty-schema and must not cause a local
+    worktree to be removed. It means "we don't know", not "it's gone".
+    """
+
+
+class PushFailed(RuntimeError):
+    """A `git push` failed. Raised in place of the raw CalledProcessError so
+    callers can log one clean line instead of a traceback."""
+
+
 def _run(cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd, cwd=cwd, check=check, capture_output=True, text=True,
     )
+
+
+def _push(cmd: list[str], cwd: str) -> None:
+    """Run a `git push` and normalize any failure to PushFailed - never lets a
+    raw CalledProcessError (and its traceback) reach a caller's log line."""
+    try:
+        _run(cmd, cwd=cwd)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()[:300]
+        raise PushFailed(f"{' '.join(cmd)} failed (exit {exc.returncode}): {stderr}") from exc
 
 
 def db_logical_hash(path: str) -> str:
@@ -116,18 +141,44 @@ def remote_url(project_dir: str) -> str:
     return _run(["git", "remote", "get-url", "origin"], cwd=project_dir).stdout.strip()
 
 
-def remote_branch_fetch_ok(repo_dir: str, branch: str) -> bool:
-    """The authoritative existence check: an actual fetch, not a cached ref.
+def remote_branch_state(repo_dir: str, branch: str) -> bool:
+    """Tri-state existence check, collapsed to a bool for the confirmed cases:
+    True if refs/heads/<branch> exists on origin, False if confirmed absent.
+    Raises RemoteCheckError for anything else (network, DNS, auth, timeout) -
+    a fetch failure is not proof of absence, and must never be treated as one.
 
+    Step 1: `git ls-remote --exit-code` checks existence against the remote
+    directly, without touching local refs. Per git's documented contract,
+    exit 2 means no matching ref was found (confirmed absent); exit 0 means
+    it was found; any other exit code is a real failure to talk to the
+    remote at all, not an answer about the ref.
+
+    Step 2: only once existence is confirmed do we run the actual `git
+    fetch`, from wherever we're about to read from (inside the worktree if
+    it exists, the main repo otherwise), to update local tracking refs -
     `git fetch` never removes a stale local refs/remotes/origin/<branch> on
     its own (no --prune), so a worktree left over from before a remote
     deletion would otherwise look fine forever to anything that only checks
-    local state. Fetching fresh, from wherever we're about to read from
-    (inside the worktree if it exists, the main repo otherwise), is what
-    actually tells us whether the remote branch is still there right now.
+    local state. A failure at this step (the ref exists but we still
+    couldn't fetch it) is also a real error, not absence.
     """
-    r = _run(["git", "fetch", "-q", "origin", branch], cwd=repo_dir, check=False)
-    return r.returncode == 0
+    ls = _run(["git", "ls-remote", "--exit-code", "origin", f"refs/heads/{branch}"],
+               cwd=repo_dir, check=False)
+    if ls.returncode == 2:
+        return False
+    if ls.returncode != 0:
+        raise RemoteCheckError(
+            f"git ls-remote origin refs/heads/{branch} failed (exit {ls.returncode}): "
+            f"{ls.stderr.strip()[:300]}"
+        )
+
+    fetch = _run(["git", "fetch", "-q", "origin", branch], cwd=repo_dir, check=False)
+    if fetch.returncode != 0:
+        raise RemoteCheckError(
+            f"git fetch origin {branch} failed (exit {fetch.returncode}) after ls-remote "
+            f"confirmed the ref exists: {fetch.stderr.strip()[:300]}"
+        )
+    return True
 
 
 def bootstrap_branch(project_dir: str, branch: str) -> None:
@@ -147,7 +198,7 @@ def bootstrap_branch(project_dir: str, branch: str) -> None:
               "commit", "-q", "-m", "initialize jarvis-state branch: empty schema, no seeded data"],
              cwd=str(scratch))
         _run(["git", "remote", "add", "origin", remote_url(project_dir)], cwd=str(scratch))
-        _run(["git", "push", "-q", "-u", "origin", branch], cwd=str(scratch))
+        _push(["git", "push", "-q", "-u", "origin", branch], cwd=str(scratch))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -162,13 +213,18 @@ def ensure_worktree(project_dir: str, branch: str, allow_bootstrap: bool = False
     wtd = worktree_dir(branch)
     had_worktree = os.path.isdir(wtd)
 
-    # The remote is checked fresh via fetch every time, regardless of whether
-    # a local worktree already exists - a worktree left over from before the
-    # branch was deleted on GitHub must never let a later sync resurrect it.
-    # Deleting the branch remotely must be a safe reset.
-    remote_ok = remote_branch_fetch_ok(wtd if had_worktree else project_dir, branch)
+    # The remote is checked fresh every time, regardless of whether a local
+    # worktree already exists - a worktree left over from before the branch
+    # was deleted on GitHub must never let a later sync resurrect it. Deleting
+    # the branch remotely must be a safe reset. A check that merely FAILS
+    # (network/DNS/auth) is not the same as a confirmed deletion and must
+    # never trigger the removal/bootstrap logic below - remote_branch_state
+    # raises RemoteCheckError for that case, which propagates out of this
+    # function untouched: no worktree is removed, nothing is bootstrapped.
+    remote_exists = remote_branch_state(wtd if had_worktree else project_dir, branch)
 
-    if not remote_ok:
+    if not remote_exists:
+        # Only a CONFIRMED absence (not a failed check) reaches here.
         if had_worktree:
             _remove_stale_worktree(project_dir, wtd)
         else:
@@ -186,7 +242,7 @@ def ensure_worktree(project_dir: str, branch: str, allow_bootstrap: bool = False
             )
 
         bootstrap_branch(project_dir, branch)
-        if not remote_branch_fetch_ok(project_dir, branch):
+        if not remote_branch_state(project_dir, branch):
             raise RuntimeError(
                 f"bootstrap of {branch!r} appeared to succeed but the branch is not "
                 "fetchable from origin"
@@ -218,8 +274,19 @@ def patch_snapshot_sidecar_path(json_path: str, new_db_path: str) -> None:
 
 
 def cmd_restore(project_dir: str, branch: str) -> int:
-    # The only caller allowed to bootstrap the branch from an empty schema.
-    wtd = ensure_worktree(project_dir, branch, allow_bootstrap=True)
+    # The only caller allowed to bootstrap the branch from an empty schema -
+    # but only on a CONFIRMED absence. A remote check that merely failed
+    # (network/DNS/auth) must refuse to boot rather than bootstrap on top of
+    # unknown state; jarvis-hook.sh already prints the user-facing "JARVIS
+    # RESTORE FAILED" line whenever this returns non-zero.
+    try:
+        wtd = ensure_worktree(project_dir, branch, allow_bootstrap=True)
+    except RemoteCheckError as exc:
+        print(f"RESTORE_FAILED remote check error - state branch not verified: {exc}")
+        return 1
+    except PushFailed as exc:
+        print(f"RESTORE_FAILED bootstrap push error: {exc}")
+        return 1
     _run(["git", "reset", "-q", "--hard", f"origin/{branch}"], cwd=wtd)
 
     jarvis_dir = Path(project_dir) / ".jarvis"
@@ -282,6 +349,11 @@ def cmd_sync(project_dir: str, branch: str, event: str, claude_session: str, upd
         wtd = ensure_worktree(project_dir, branch)
     except NoStateBranch as exc:
         print(f"NOOP {exc}")
+        return 0
+    except RemoteCheckError as exc:
+        # A failed check is not a confirmed absence - never remove a
+        # worktree or push on the strength of it. Nothing has been touched.
+        print(f"REMOTE_CHECK_FAILED {exc} - push skipped")
         return 0
 
     base_sha = _run(["git", "rev-parse", "HEAD"], cwd=wtd).stdout.strip()
