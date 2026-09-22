@@ -2,3 +2,4 @@ __pycache__/
 *.py[cod]
 .jarvis/
 .claude/hooks/jarvis-hook.log
+.claude/hooks/logs/
