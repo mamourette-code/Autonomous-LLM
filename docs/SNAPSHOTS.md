@@ -62,8 +62,12 @@ immediately before the snapshot operation.
 
 Each snapshot has a JSON sidecar (`<snapshot>.db.json`) recording its id,
 creation timestamp, source database, schema version, integrity and foreign-key
-results, location, size, per-table row counts, the actor, the reason, and the
-creation result.
+results, location, size, per-table row counts, the actor, the reason, the
+creation result, and the code version: `git_sha` (the jarvis checkout's HEAD at
+creation time) and `git_dirty` (whether that checkout had uncommitted changes).
+Both are `null` when git or a repo isn't available - a snapshot is never
+refused, and a SHA is never reported without also saying whether the tree was
+clean, since a dirty SHA is not the exact code version it names.
 
 Metadata lives in a sidecar rather than a database table for two reasons: a
 snapshot must be usable independently of the database it came from, so its

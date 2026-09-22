@@ -308,6 +308,8 @@ def _snapshot_dict(snap) -> dict[str, Any]:
         "valid": snap.is_valid,
         "reason": snap.reason,
         "rows": snap.tables,
+        "git_sha": snap.git_sha,
+        "git_dirty": snap.git_dirty,
     }
 
 

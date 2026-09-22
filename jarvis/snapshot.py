@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -74,6 +75,8 @@ class Snapshot:
     actor: str
     reason: str = ""
     tables: dict[str, int] = field(default_factory=dict)
+    git_sha: str | None = None
+    git_dirty: bool | None = None
 
     @property
     def is_valid(self) -> bool:
@@ -100,6 +103,43 @@ class Snapshot:
 def _stamp() -> str:
     """Filename timestamp. A seam: tests patch this to force a name collision."""
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _run_git(args: list[str], cwd: str) -> str | None:
+    """Runs one git command, returning stripped stdout or None on any failure.
+
+    Best-effort only, by design: git being missing, the directory not being a
+    checkout, or a permission error must never stop a snapshot from being
+    taken - the code version is a nice-to-have annotation, not a precondition.
+    """
+    try:
+        result = subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _git_state(repo_dir: str | os.PathLike | None = None) -> tuple[str | None, bool | None]:
+    """(git_sha, git_dirty) for the given checkout - the jarvis package's own
+    by default, since that is the code a snapshot was actually taken by.
+
+    Both are None when git or a repo isn't available ("when available" is the
+    contract). `git_dirty` exists because a SHA alone understates the risk: a
+    snapshot taken with uncommitted changes was not produced by exactly that
+    commit, and reporting the SHA without that flag would silently overstate
+    how exactly the code version is known.
+    """
+    directory = str(repo_dir) if repo_dir is not None else str(Path(__file__).resolve().parent.parent)
+    sha = _run_git(["rev-parse", "HEAD"], directory)
+    if not sha:
+        return None, None
+    status = _run_git(["status", "--porcelain"], directory)
+    dirty = None if status is None else bool(status)
+    return sha, dirty
 
 
 def default_directory(store: Store) -> Path:
@@ -186,6 +226,7 @@ def create(
         raise SnapshotError(f"could not write snapshot to {path}: {exc}") from exc
 
     checks = inspect(str(path))
+    git_sha, git_dirty = _git_state()
     snapshot = Snapshot(
         id=snapshot_id,
         created_at=utcnow(),
@@ -199,6 +240,8 @@ def create(
         actor=actor,
         reason=reason,
         tables=checks["tables"],
+        git_sha=git_sha,
+        git_dirty=git_dirty,
     )
     _write_sidecar(snapshot)
 
@@ -216,6 +259,8 @@ def create(
         integrity=snapshot.integrity,
         rows=sum(snapshot.tables.values()),
         reason=reason,
+        git_sha=git_sha,
+        git_dirty=git_dirty,
     )
     if snapshot.result != "ok":
         raise SnapshotError(
