@@ -10,11 +10,13 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
 import tempfile
 import threading
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime
+from pathlib import Path
 
 from jarvis import diagnostics, events, memory, objectives, snapshot, tasks
 from jarvis.cli import main
@@ -332,6 +334,114 @@ class MetadataTest(unittest.TestCase):
             snapshot.latest_valid(self.store, schema_version=SCHEMA_VERSION).id, snap.id
         )
         self.assertIsNone(snapshot.latest_valid(self.store, schema_version=99))
+
+
+def _init_repo(directory):
+    """A throwaway git repo, independent of whatever state this checkout is
+    in, so dirty/clean behaviour is tested deterministically rather than by
+    hoping the real working tree happens to be in the right state."""
+    run = lambda *args: subprocess.run(  # noqa: E731
+        ["git", *args], cwd=directory, check=True, capture_output=True, text=True,
+    )
+    run("init", "-q")
+    run("-c", "user.email=test@example.com", "-c", "user.name=test", "commit",
+        "-q", "--allow-empty", "-m", "initial")
+
+
+class GitVersionTest(unittest.TestCase):
+    """A2: a snapshot's sidecar must say which code version produced it, when
+    that is knowable - and must never claim to know it when it is not."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = open_store(os.path.join(self.tmp.name, "jarvis.db"))
+
+    def test_git_state_is_none_outside_a_repo(self):
+        sha, dirty = snapshot._git_state(self.tmp.name)
+        self.assertIsNone(sha)
+        self.assertIsNone(dirty)
+
+    def test_git_state_is_none_when_git_itself_is_unavailable(self):
+        real_run = snapshot.subprocess.run
+
+        def missing_git(*args, **kwargs):
+            raise FileNotFoundError("no such file or directory: 'git'")
+
+        snapshot.subprocess.run = missing_git
+        try:
+            sha, dirty = snapshot._git_state(self.tmp.name)
+        finally:
+            snapshot.subprocess.run = real_run
+        self.assertIsNone(sha)
+        self.assertIsNone(dirty)
+
+    def test_git_state_reports_the_head_sha_and_a_clean_tree(self):
+        with tempfile.TemporaryDirectory() as repo:
+            _init_repo(repo)
+            expected = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+            ).stdout.strip()
+            sha, dirty = snapshot._git_state(repo)
+            self.assertEqual(sha, expected)
+            self.assertFalse(dirty)
+
+    def test_git_state_reports_dirty_when_the_tree_has_uncommitted_changes(self):
+        with tempfile.TemporaryDirectory() as repo:
+            _init_repo(repo)
+            Path(repo, "untracked.txt").write_text("uncommitted")
+            sha, dirty = snapshot._git_state(repo)
+            self.assertIsNotNone(sha)
+            self.assertTrue(dirty)
+
+    def test_create_never_fails_when_git_is_unavailable(self):
+        """The SHA is a nice-to-have annotation, never a precondition."""
+        real_git_state = snapshot._git_state
+        snapshot._git_state = lambda *a, **k: (None, None)
+        try:
+            snap = snapshot.create(self.store)
+        finally:
+            snapshot._git_state = real_git_state
+        self.assertEqual(snap.result, "ok")
+        self.assertIsNone(snap.git_sha)
+        self.assertIsNone(snap.git_dirty)
+
+    def test_create_records_the_git_state_of_this_checkout(self):
+        """This test runs inside the jarvis repo's own checkout, so it is a
+        real integration check against `create()`'s default repo_dir."""
+        expected_sha, expected_dirty = snapshot._git_state()
+        snap = snapshot.create(self.store)
+        self.assertEqual(snap.git_sha, expected_sha)
+        self.assertEqual(snap.git_dirty, expected_dirty)
+        self.assertIsInstance(snap.git_dirty, bool)
+
+    def test_sidecar_and_audit_event_carry_git_sha_and_dirty(self):
+        snap = snapshot.create(self.store)
+        with open(snap.sidecar) as handle:
+            data = json.load(handle)
+        self.assertEqual(data["git_sha"], snap.git_sha)
+        self.assertEqual(data["git_dirty"], snap.git_dirty)
+
+        event = events.recent(self.store)[0]
+        self.assertEqual(event["kind"], "snapshot.create")
+        self.assertEqual(event["detail"]["git_sha"], snap.git_sha)
+        self.assertEqual(event["detail"]["git_dirty"], snap.git_dirty)
+
+    def test_old_sidecar_without_git_fields_still_loads(self):
+        """Backward compatibility: a sidecar written before this change has no
+        git_sha/git_dirty keys at all, not null values for them."""
+        snap = snapshot.create(self.store)
+        with open(snap.sidecar) as handle:
+            data = json.load(handle)
+        del data["git_sha"]
+        del data["git_dirty"]
+        with open(snap.sidecar, "w") as handle:
+            json.dump(data, handle)
+
+        loaded = snapshot.load(snap.sidecar)
+        self.assertIsNotNone(loaded)
+        self.assertIsNone(loaded.git_sha)
+        self.assertIsNone(loaded.git_dirty)
 
 
 class FailureHandlingTest(unittest.TestCase):
