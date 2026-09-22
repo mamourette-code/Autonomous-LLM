@@ -19,9 +19,17 @@
 # restores from it before booting; PreCompact/SessionEnd/Stop push to it when
 # content changed. See jarvis_state_sync.py's module docstring for the design.
 #
-# Every outcome (success or failure) is appended to jarvis-hook.log. This
-# script always exits 0: a JARVIS failure must never break a Claude Code
-# session. Failures are recorded in the log, never left silently unrecorded.
+# Every outcome (success or failure) is appended to this Claude Code session's
+# own log file, .claude/hooks/logs/<claude_session_id>.log - never a single
+# shared file, so two containers writing concurrently can never clobber each
+# other's lines. Run .claude/hooks/show-log.sh for a merged, timestamp-sorted
+# view across every session's log. This script always exits 0: a JARVIS
+# failure must never break a Claude Code session. Failures are recorded in
+# the log, never left silently unrecorded.
+#
+# .claude/hooks/jarvis-hook.log (the old single shared log) is no longer
+# written to. It is left in place, and its last committed copy stays on the
+# state branch as a frozen legacy file - nothing reads or writes it anymore.
 #
 # Orphan policy: a JARVIS session whose Claude Code session ended without a
 # SessionEnd hook firing (crash, killed terminal) is logged as an orphan and
@@ -42,13 +50,14 @@ cd "$PROJECT_DIR" || exit 0
 export JARVIS_HOME="$PROJECT_DIR/.jarvis"
 
 PYTHON="/usr/local/bin/python3"
-LOG="$PROJECT_DIR/.claude/hooks/jarvis-hook.log"
 MAP_DIR="$JARVIS_HOME/hook_sessions"
 STATE_SYNC="$SCRIPT_DIR/jarvis_state_sync.py"
-mkdir -p "$MAP_DIR" "$(dirname "$LOG")"
+LOGS_DIR="$PROJECT_DIR/.claude/hooks/logs"
+mkdir -p "$MAP_DIR" "$LOGS_DIR"
 
 STDIN_JSON="$(cat)"
 CC_SESSION_ID="$(printf '%s' "$STDIN_JSON" | jq -r '.session_id // "unknown"')"
+LOG="$LOGS_DIR/$CC_SESSION_ID.log"
 EVENT="${1:-}"
 shift || true
 
@@ -127,11 +136,11 @@ case "$EVENT" in
       # First SessionStart in this container's lifetime (or a corrupt restore
       # was moved aside earlier) - restore from the state branch before doing
       # anything else. Never boot on top of a restore that fails integrity.
-      RESTORE_OUT="$("$PYTHON" "$STATE_SYNC" restore 2>&1)"
+      RESTORE_OUT="$("$PYTHON" "$STATE_SYNC" restore "$CC_SESSION_ID" 2>&1)"
       RESTORE_RC=$?
       log "$RESTORE_RC" "$RESTORE_OUT"
       if [ "$RESTORE_RC" -ne 0 ]; then
-        echo "JARVIS RESTORE FAILED - session not tracked, see .claude/hooks/jarvis-hook.log"
+        echo "JARVIS RESTORE FAILED - session not tracked, see $LOG"
         exit 0
       fi
     fi
@@ -166,7 +175,7 @@ case "$EVENT" in
       ERR="$(cat /tmp/jarvis_hook_err.$$ 2>/dev/null)"
       rm -f /tmp/jarvis_hook_err.$$
       log "$RC" "source=$SOURCE boot failed: $ERR"
-      echo "[jarvis-hook] boot failed - see .claude/hooks/jarvis-hook.log"
+      echo "[jarvis-hook] boot failed - see $LOG"
       exit 0
     fi
     rm -f /tmp/jarvis_hook_err.$$

@@ -17,14 +17,25 @@ Design (see the conversation this was built from for the full rationale):
   is checked out as a git worktree OUTSIDE the repo, at
   ~/.jarvis-state-worktrees/<branch>, so testing with a different branch name
   never touches the real one's worktree either.
-- The branch holds exactly three things: jarvis.db (a throwaway backup-API
-  copy, refreshed on every push), snapshots/snapshot.db(+.json) (the latest
-  REAL `jarvis snapshot create` output, refreshed only at PreCompact), and
-  jarvis-hook.log.
-- Push gate: compare the new backup's sha256 against db.sha256 already
-  committed in the worktree. Unchanged DB -> no commit, no push, no exception
-  for the log (its fresher content just waits in the worktree's uncommitted
-  working copy until the next real push).
+- The branch holds: jarvis.db (a throwaway backup-API copy, refreshed on
+  every push), snapshots/snapshot.db(+.json) (the latest REAL `jarvis
+  snapshot create` output, refreshed only at PreCompact), one file per
+  Claude Code session under logs/ (named logs/<claude_session_id>.log,
+  written only by that session's own container), and a frozen legacy
+  jarvis-hook.log left over from before per-session logs - nothing reads or
+  writes that file anymore.
+- Per-session logs: each container appends only to its own
+  .claude/hooks/logs/<claude_session_id>.log locally, and sync copies only
+  that one file to logs/<claude_session_id>.log on the branch. A container
+  never reads, writes, hashes, stages, or deletes another session's log file
+  - two containers pushing in turn always both survive on the branch.
+  .claude/hooks/show-log.sh merges every session's log into one
+  timestamp-sorted view for humans.
+- Push gate: compare the new DB backup's sha256 against db.sha256 already
+  committed, AND this session's own log content against what's already
+  committed for it. Unchanged on both counts (and no new snapshot) -> no
+  commit, no push. A change confined to another session's log file is
+  invisible to this gate - it can never trigger a push here.
 - Conflict handling: before pushing, fetch the branch. If its remote head has
   moved past the commit this run started from, do not push to jarvis-state at
   all. Instead, build a new commit (`git commit-tree`) whose tree is this
@@ -273,7 +284,37 @@ def patch_snapshot_sidecar_path(json_path: str, new_db_path: str) -> None:
         json.dump(data, fh, indent=2, sort_keys=True)
 
 
-def cmd_restore(project_dir: str, branch: str) -> int:
+def restore_logs_dir(wtd: str, project_dir: str, claude_session: str | None) -> None:
+    """Copies the branch's logs/ directory down as local history.
+
+    Every OTHER session's file is copied read-only - a container must never
+    write or delete another session's log. This run's own file (if the
+    branch already has one, e.g. a resumed container whose local .jarvis/ was
+    lost) is copied writable so jarvis-hook.sh can keep appending to it; a
+    file that already has local content (this run already logged something
+    before reaching here) is never clobbered either way.
+    """
+    wtd_logs = Path(wtd) / "logs"
+    if not wtd_logs.is_dir():
+        return
+    local_logs = Path(project_dir) / ".claude" / "hooks" / "logs"
+    local_logs.mkdir(parents=True, exist_ok=True)
+    own_name = f"{claude_session}.log" if claude_session else None
+    for f in sorted(wtd_logs.iterdir()):
+        if not f.is_file():
+            continue
+        dest = local_logs / f.name
+        if dest.exists() and dest.stat().st_size > 0:
+            continue
+        shutil.copyfile(f, dest)
+        if f.name != own_name:
+            try:
+                dest.chmod(0o444)
+            except OSError:
+                pass
+
+
+def cmd_restore(project_dir: str, branch: str, claude_session: str | None = None) -> int:
     # The only caller allowed to bootstrap the branch from an empty schema -
     # but only on a CONFIRMED absence. A remote check that merely failed
     # (network/DNS/auth) must refuse to boot rather than bootstrap on top of
@@ -291,11 +332,16 @@ def cmd_restore(project_dir: str, branch: str) -> int:
 
     jarvis_dir = Path(project_dir) / ".jarvis"
     jarvis_dir.mkdir(exist_ok=True)
+
+    # Legacy single-file log: read-only historical copy, same as before.
+    # Nothing writes this file going forward (see module docstring).
     log_path = Path(project_dir) / ".claude" / "hooks" / "jarvis-hook.log"
     wtd_log = Path(wtd) / "jarvis-hook.log"
     if wtd_log.exists() and not (log_path.exists() and log_path.stat().st_size > 0):
         log_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(wtd_log, log_path)
+
+    restore_logs_dir(wtd, project_dir, claude_session)
 
     db_dest = jarvis_dir / "jarvis.db"
     wtd_db = Path(wtd) / "jarvis.db"
@@ -390,16 +436,32 @@ def cmd_sync(project_dir: str, branch: str, event: str, claude_session: str, upd
         print(f"BACKUP_FAILED {type(exc).__name__}: {exc} - push skipped")
         return 0
 
-    log_src = Path(project_dir) / ".claude" / "hooks" / "jarvis-hook.log"
-    if log_src.exists():
-        shutil.copyfile(log_src, Path(wtd) / "jarvis-hook.log")
+    # Only this session's own log file - never touch, read, or hash any other
+    # session's file under logs/. It's the only log input to the push gate
+    # below, so a change confined to another session's log can never trigger
+    # a push from this container.
+    own_log_src = Path(project_dir) / ".claude" / "hooks" / "logs" / f"{claude_session}.log"
+    own_log_dest = Path(wtd) / "logs" / f"{claude_session}.log"
+    prior_log_hash = (hashlib.sha256(own_log_dest.read_bytes()).hexdigest()
+                       if own_log_dest.exists() else None)
+    new_log_hash = None
+    if own_log_src.exists():
+        new_log_hash = hashlib.sha256(own_log_src.read_bytes()).hexdigest()
+        own_log_dest.parent.mkdir(exist_ok=True)
+        shutil.copyfile(own_log_src, own_log_dest)
+    log_changed = new_log_hash is not None and new_log_hash != prior_log_hash
 
-    if new_hash == old_hash and not snapshot_changed:
+    if new_hash == old_hash and not snapshot_changed and not log_changed:
         print(f"NOOP hash={new_hash[:12]} unchanged since last push")
         return 0
 
     sha_file.write_text(new_hash)
-    _run(["git", "add", "-A"], cwd=wtd)
+    add_paths = ["jarvis.db", "db.sha256"]
+    if log_changed:
+        add_paths.append(f"logs/{claude_session}.log")
+    if snapshot_changed:
+        add_paths += ["snapshots/snapshot.db", "snapshots/snapshot.db.json"]
+    _run(["git", "add", "--"] + add_paths, cwd=wtd)
     commit = _run(
         ["git", "-c", "user.email=jarvis-state@local", "-c", "user.name=jarvis-state-sync",
          "commit", "-q", "-m",
@@ -407,8 +469,8 @@ def cmd_sync(project_dir: str, branch: str, event: str, claude_session: str, upd
         cwd=wtd, check=False,
     )
     if commit.returncode != 0:
-        # `git add -A` found nothing to commit (can happen if only file mtimes
-        # changed) - treat like any other no-op.
+        # The explicit `git add` above found nothing to commit (can happen if
+        # only file mtimes changed) - treat like any other no-op.
         print(f"NOOP hash={new_hash[:12]} nothing to commit")
         return 0
     new_commit_sha = _run(["git", "rev-parse", "HEAD"], cwd=wtd).stdout.strip()
@@ -463,7 +525,8 @@ def main(argv: list[str]) -> int:
     branch = os.environ.get("JARVIS_STATE_BRANCH", "jarvis-state")
 
     if action == "restore":
-        return cmd_restore(project_dir, branch)
+        claude_session = argv[2] if len(argv) > 2 else None
+        return cmd_restore(project_dir, branch, claude_session)
     if action == "sync":
         if len(argv) < 4:
             print("usage: jarvis_state_sync.py sync <event> <claude_session_id> [--update-snapshot]",
