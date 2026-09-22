@@ -33,6 +33,27 @@ the point.
 
 ## Priority 2 - build when operation produces the evidence
 
+### CLI command for objective status changes (s64)
+- **Limitation.** `jarvis objective` only supports `add`, `list`, and `resolve`
+  (an open question). There is no CLI command wired to `objectives.set_status`,
+  so even the objective's own authority - the user - cannot mark an objective
+  achieved or abandoned from the command line; only the Python API can.
+- **Trigger met.** 22 September 2026, `obj_b7a913f7b04c`: the user asked to
+  mark this objective achieved and there was no command to do it. Logged as
+  task `tsk_c49895b2e063`, failure class `implementation_error`.
+- **Design question this raises.** When Claude runs the CLI on the user's
+  explicit chat instruction, is that the user's authority under s64, or the
+  agent's own? If it is the user's, what should the command record to show
+  the approval came from the user rather than from the agent's own
+  judgement - a distinct actor, a `--confirmed-by-user` flag, something else
+  captured in `authorized_by`? `set_status` already takes `authorized_by`
+  and checks `actor != obj.authority`; wiring a CLI command in front of it
+  without answering this risks reproducing exactly the fabricated-authorization
+  failure the Authority model section of docs/ARCHITECTURE.md describes and
+  fixed - recording a user approval that was actually the agent's inference.
+- **Not building yet.** The design question above needs an answer first; a
+  command that gets attribution wrong is worse than no command.
+
 ### Tool registry (s32/s33)
 - **Trigger.** Repeated `invalid_tool_call` or `tool_failure` entries in
   `metrics.tasks.failure_classes`. The failure taxonomy exists precisely so
