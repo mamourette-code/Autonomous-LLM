@@ -5,12 +5,19 @@
 #   jarvis-hook.sh boot                              # SessionStart
 #   jarvis-hook.sh snapshot create --reason pre-compact   # PreCompact
 #   jarvis-hook.sh close                             # SessionEnd
+#   jarvis-hook.sh stop                              # Stop (state sync only)
 #
 # Each hook receives the event's JSON payload on stdin (session_id plus
 # event-specific fields such as `source` or `reason`). This script maps
 # Claude Code's session_id to the JARVIS session_id it booted, one mapping
 # file per Claude Code session under .jarvis/hook_sessions/, so concurrent
 # Claude Code sessions never share or clobber each other's JARVIS session.
+#
+# Cross-container persistence: .jarvis/ is gitignored and lost between fresh
+# containers, so state is mirrored to a git branch (jarvis_state_sync.py,
+# default branch `jarvis-state`, override with JARVIS_STATE_BRANCH). SessionStart
+# restores from it before booting; PreCompact/SessionEnd/Stop push to it when
+# content changed. See jarvis_state_sync.py's module docstring for the design.
 #
 # Every outcome (success or failure) is appended to jarvis-hook.log. This
 # script always exits 0: a JARVIS failure must never break a Claude Code
@@ -37,6 +44,7 @@ export JARVIS_HOME="$PROJECT_DIR/.jarvis"
 PYTHON="/usr/local/bin/python3"
 LOG="$PROJECT_DIR/.claude/hooks/jarvis-hook.log"
 MAP_DIR="$JARVIS_HOME/hook_sessions"
+STATE_SYNC="$SCRIPT_DIR/jarvis_state_sync.py"
 mkdir -p "$MAP_DIR" "$(dirname "$LOG")"
 
 STDIN_JSON="$(cat)"
@@ -93,9 +101,40 @@ scan_orphans() {
   done
 }
 
+# Pushes the current .jarvis/ state to the state branch if it changed, then
+# always exits 0. $1 = event name for the commit message / log line; any
+# further args (e.g. --update-snapshot) are passed through to the sync
+# subcommand. A no-op DB (nothing changed since the last push) never pushes.
+sync_and_exit() {
+  local event="$1"
+  shift || true
+  if [ -f "$JARVIS_HOME/jarvis.db" ]; then
+    local out rc
+    out="$("$PYTHON" "$STATE_SYNC" sync "$event" "$CC_SESSION_ID" "$@" 2>&1)"
+    rc=$?
+    log "$rc" "$out"
+  else
+    log 0 "$event: no local .jarvis/jarvis.db, nothing to sync"
+  fi
+  exit 0
+}
+
 case "$EVENT" in
   boot)
     SOURCE="$(printf '%s' "$STDIN_JSON" | jq -r '.source // "unknown"')"
+
+    if [ ! -f "$JARVIS_HOME/jarvis.db" ]; then
+      # First SessionStart in this container's lifetime (or a corrupt restore
+      # was moved aside earlier) - restore from the state branch before doing
+      # anything else. Never boot on top of a restore that fails integrity.
+      RESTORE_OUT="$("$PYTHON" "$STATE_SYNC" restore 2>&1)"
+      RESTORE_RC=$?
+      log "$RESTORE_RC" "$RESTORE_OUT"
+      if [ "$RESTORE_RC" -ne 0 ]; then
+        echo "JARVIS RESTORE FAILED - session not tracked, see .claude/hooks/jarvis-hook.log"
+        exit 0
+      fi
+    fi
 
     scan_orphans
 
@@ -150,8 +189,11 @@ case "$EVENT" in
     RC=$?
     if [ "$RC" -ne 0 ]; then
       log "$RC" "snapshot $* failed: $OUT"
+      # No fresh named snapshot to publish, but still flush the DB backup.
+      sync_and_exit precompact
     else
       log 0 "snapshot $* ok"
+      sync_and_exit precompact --update-snapshot
     fi
     ;;
 
@@ -160,7 +202,7 @@ case "$EVENT" in
 
     if [ ! -f "$MAP_FILE" ]; then
       log 0 "no jarvis session mapped for this claude session (reason=$REASON) - nothing to close"
-      exit 0
+      sync_and_exit close
     fi
 
     JARVIS_ID="$(cat "$MAP_FILE")"
@@ -178,11 +220,16 @@ case "$EVENT" in
         # exactly the orphan case: a future boot's scan will find and log it.
         log "$RC" "reason=$REASON close $JARVIS_ID failed: $OUT"
       fi
-      exit 0
+      sync_and_exit close
     fi
 
     rm -f "$MAP_FILE"
     log 0 "reason=$REASON closed jarvis session $JARVIS_ID"
+    sync_and_exit close
+    ;;
+
+  stop)
+    sync_and_exit stop
     ;;
 
   *)
